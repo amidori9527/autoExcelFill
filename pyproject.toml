@@ -1,0 +1,14 @@
+[project]
+name = "autoexcel"
+version = "0.1.0"
+description = "Excel automation scripts for data.xlsx."
+requires-python = ">=3.10"
+dependencies = [
+    "openpyxl>=3.1.5",
+]
+
+[project.scripts]
+autoexcel = "autoexcel.main:main"
+
+[tool.ruff]
+line-length = 100
