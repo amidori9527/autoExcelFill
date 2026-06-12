@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import configparser
+import re
 import sys
 import traceback
 from datetime import date, datetime
@@ -144,7 +145,26 @@ def apply_config_defaults(args: argparse.Namespace, config: configparser.Section
 
 
 def parse_date(value: str) -> date:
-    return datetime.strptime(value, "%Y-%m-%d").date()
+    raw_value = value.strip()
+    current_year = date.today().year
+
+    if re.fullmatch(r"\d{4}", raw_value):
+        month = int(raw_value[:2])
+        day = int(raw_value[2:])
+        return date(current_year, month, day)
+
+    normalized = raw_value.replace("/", "-").replace(".", "-")
+    if re.fullmatch(r"\d{1,2}-\d{1,2}", normalized):
+        month_text, day_text = normalized.split("-")
+        return date(current_year, int(month_text), int(day_text))
+
+    for date_format in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"):
+        try:
+            return datetime.strptime(raw_value, date_format).date()
+        except ValueError:
+            continue
+
+    raise ValueError("日期格式不对，请输入 2026-06-10、0610、06-10 或 05/12")
 
 
 def resolve_current_date(args: argparse.Namespace) -> date:
@@ -258,14 +278,15 @@ def choose_workbook_from_current_directory() -> Path:
 def choose_current_date() -> str:
     default_date = date.today().strftime("%Y-%m-%d")
     while True:
-        raw_value = input(f"目标日期 YYYY-MM-DD，直接回车默认今天 {default_date}：").strip()
+        raw_value = input(
+            f"目标日期，直接回车默认今天 {default_date}；示例：2026-06-10、0610、06-10、05/12："
+        ).strip()
         selected_value = raw_value or default_date
         try:
-            parse_date(selected_value)
-        except ValueError:
-            print("日期格式不对，请输入类似 2026-06-10 的格式。")
+            return parse_date(selected_value).strftime("%Y-%m-%d")
+        except ValueError as error:
+            print(error)
             continue
-        return selected_value
 
 
 def apply_interactive_fill_defaults(
@@ -277,6 +298,8 @@ def apply_interactive_fill_defaults(
         args.workbook = choose_workbook_from_current_directory()
     if args.current_date is None:
         args.current_date = date.today().strftime("%Y-%m-%d")
+    else:
+        args.current_date = parse_date(args.current_date).strftime("%Y-%m-%d")
     args.freeze_next_day_row = True
     args.limit_sheets = args.limit_sheets or 20
 

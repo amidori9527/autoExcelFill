@@ -9,6 +9,7 @@
 
 - 可直接修改 autoexcel-fill/config.ini
 - target_date 留空表示使用电脑今天日期
+- 日期支持 2026-06-10、0610、06-10、05/12；不写年份则默认当前年
 - workbook 留空表示运行时从 workspace 中选择 Excel
 
 注意：
