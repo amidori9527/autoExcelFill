@@ -5,4 +5,7 @@ __pycache__/
 build/
 outputs/
 autoexcel-fill-error.log
+*.zip
+workspace/*.xlsx
+dist/**/workspace/*.xlsx
 ~$*.xlsx
