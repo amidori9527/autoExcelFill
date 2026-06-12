@@ -2,7 +2,8 @@
 
 1. 解压 autoexcel-fill-macOS.zip
 2. 把需要处理的 .xlsx 文件放入 autoexcel-fill/workspace 文件夹
-3. 双击 run-autoexcel-fill.command
+3. 如果 macOS 提示“无法检查是否包含恶意软件”，先双击 first-run-unblock.command
+4. 双击 run-autoexcel-fill.command
 
 注意：
 
