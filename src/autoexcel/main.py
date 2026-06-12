@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 from datetime import date, datetime
 from pathlib import Path
 
@@ -211,6 +212,30 @@ def apply_interactive_fill_defaults(args: argparse.Namespace) -> argparse.Namesp
     return args
 
 
+def is_frozen_app() -> bool:
+    return getattr(sys, "frozen", False)
+
+
+def should_pause_before_exit() -> bool:
+    return is_frozen_app() and sys.stdin.isatty()
+
+
+def pause_before_exit() -> None:
+    if not should_pause_before_exit():
+        return
+    try:
+        input("\n按回车退出...")
+    except EOFError:
+        pass
+
+
+def write_error_log(error: BaseException) -> Path:
+    log_path = get_executable_directory() / "autoexcel-fill-error.log"
+    log_text = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    log_path.write_text(log_text, encoding="utf-8")
+    return log_path
+
+
 def main() -> None:
     args = parse_args()
 
@@ -231,6 +256,8 @@ def main() -> None:
             batch_number = 0
             while True:
                 batch_number += 1
+                print(f"Batch {batch_number}: 正在读取并处理 workbook，请不要打开 Excel 文件...")
+                sys.stdout.flush()
                 result = add_current_date_to_colored_sheets_fast(
                     xlsx_path=args.workbook,
                     current_date=current_date,
@@ -305,11 +332,24 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    exit_code = 0
     try:
         main()
     except KeyboardInterrupt:
         print("\n已取消。")
-        sys.exit(130)
+        exit_code = 130
     except (FileNotFoundError, RuntimeError, ValueError) as error:
         print(f"错误：{error}")
-        sys.exit(1)
+        exit_code = 1
+    except Exception as error:
+        try:
+            log_path = write_error_log(error)
+            print(f"程序执行失败：{error}")
+            print(f"详细错误已写入：{log_path}")
+        except Exception:
+            print("程序执行失败，并且写入错误日志时也失败：")
+            traceback.print_exc()
+        exit_code = 1
+    finally:
+        pause_before_exit()
+    sys.exit(exit_code)
