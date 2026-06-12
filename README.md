@@ -34,6 +34,10 @@ Put the target `.xlsx` file into the `workspace` folder next to the packaged
 executable, then run the executable directly. The tool will list workbooks in
 that folder and use today's date by default.
 
+Default behavior is controlled by `config.ini` next to the executable. Users can
+edit it with a text editor to set `target_date`, `limit_sheets`, `workbook`, and
+other fill options.
+
 Before running the fill operation, close the workbook in Excel/WPS. If the
 program fails, it writes details to `autoexcel-fill-error.log` next to the
 executable.

@@ -5,6 +5,12 @@
 3. 如果 macOS 提示“无法检查是否包含恶意软件”，先双击 first-run-unblock.command
 4. 双击 run-autoexcel-fill.command
 
+默认配置：
+
+- 可直接修改 autoexcel-fill/config.ini
+- target_date 留空表示使用电脑今天日期
+- workbook 留空表示运行时从 workspace 中选择 Excel
+
 注意：
 
 - 不要只单独复制 autoexcel-fill 这个可执行文件，必须保留整个 autoexcel-fill 文件夹。

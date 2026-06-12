@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+from shutil import copy2
 
 a = Analysis(
     ['src/autoexcel/main.py'],
@@ -45,3 +46,4 @@ coll = COLLECT(
 )
 
 Path(DISTPATH, 'autoexcel-fill', 'workspace').mkdir(parents=True, exist_ok=True)
+copy2('config.ini', Path(DISTPATH, 'autoexcel-fill', 'config.ini'))

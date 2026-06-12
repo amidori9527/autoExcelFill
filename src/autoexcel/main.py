@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import configparser
 import sys
 import traceback
 from datetime import date, datetime
@@ -17,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_FILE = PROJECT_ROOT / "data.xlsx"
 EXAMPLE_SHEET = "example"
 WORKSPACE_DIR_NAME = "workspace"
+CONFIG_FILE_NAME = "config.ini"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -71,8 +73,73 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     args = parser.parse_args(argv)
     args.interactive = args.interactive or len(argv if argv is not None else sys.argv[1:]) == 0
-    if args.workbook is None:
-        args.workbook = DATA_FILE
+    return args
+
+
+def parse_bool(value: str, option_name: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "yes", "y", "true", "on"}:
+        return True
+    if normalized in {"0", "no", "n", "false", "off"}:
+        return False
+    raise ValueError(f"config.ini 中 {option_name} 必须是 true 或 false")
+
+
+def get_config_path() -> Path:
+    if is_frozen_app():
+        candidates = (
+            get_executable_directory() / CONFIG_FILE_NAME,
+            Path.cwd() / CONFIG_FILE_NAME,
+            PROJECT_ROOT / CONFIG_FILE_NAME,
+        )
+    else:
+        candidates = (
+            Path.cwd() / CONFIG_FILE_NAME,
+            PROJECT_ROOT / CONFIG_FILE_NAME,
+        )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def load_config() -> configparser.SectionProxy:
+    config = configparser.ConfigParser()
+    config_path = get_config_path()
+    if config_path.exists():
+        config.read(config_path, encoding="utf-8")
+    if "fill" not in config:
+        config["fill"] = {}
+    return config["fill"]
+
+
+def apply_config_defaults(args: argparse.Namespace, config: configparser.SectionProxy) -> argparse.Namespace:
+    workbook_value = config.get("workbook", "").strip()
+    if args.workbook is None and workbook_value:
+        workbook_path = Path(workbook_value).expanduser()
+        if not workbook_path.is_absolute():
+            workbook_path = find_existing_workspace_directory() / workbook_path
+        args.workbook = workbook_path
+
+    if args.current_date is None:
+        target_date = config.get("target_date", "").strip()
+        if target_date:
+            args.current_date = target_date
+
+    if args.limit_sheets is None:
+        limit_sheets = config.get("limit_sheets", "").strip()
+        if limit_sheets:
+            args.limit_sheets = int(limit_sheets)
+
+    if not args.colored_sheets:
+        args.colored_sheets = parse_bool(config.get("colored_sheets", "true"), "colored_sheets")
+
+    if not args.fast_xml:
+        args.fast_xml = parse_bool(config.get("fast_xml", "true"), "fast_xml")
+
+    if not args.run_until_done:
+        args.run_until_done = parse_bool(config.get("run_until_done", "true"), "run_until_done")
+
     return args
 
 
@@ -125,6 +192,16 @@ def iter_workspace_directories() -> list[Path]:
         if workspace_directory not in directories:
             directories.append(workspace_directory)
     return directories
+
+
+def find_existing_workspace_directory() -> Path:
+    checked: list[Path] = []
+    for directory in iter_workspace_directories():
+        checked.append(directory)
+        if directory.is_dir():
+            return directory
+    checked_text = "\n  ".join(str(path) for path in checked)
+    raise FileNotFoundError(f"没有找到 workspace 文件夹。已检查目录：\n  {checked_text}")
 
 
 def find_workbook_directory() -> tuple[Path, list[Path]]:
@@ -191,23 +268,27 @@ def choose_current_date() -> str:
         return selected_value
 
 
-def apply_interactive_fill_defaults(args: argparse.Namespace) -> argparse.Namespace:
-    args.workbook = choose_workbook_from_current_directory()
-    args.current_date = choose_current_date()
+def apply_interactive_fill_defaults(
+    args: argparse.Namespace,
+    config: configparser.SectionProxy,
+) -> argparse.Namespace:
+    select_workbook = parse_bool(config.get("select_workbook", "true"), "select_workbook")
+    if select_workbook or args.workbook is None:
+        args.workbook = choose_workbook_from_current_directory()
+    if args.current_date is None:
+        args.current_date = date.today().strftime("%Y-%m-%d")
     args.freeze_next_day_row = True
-    args.colored_sheets = True
-    args.fast_xml = True
-    args.run_until_done = True
     args.limit_sheets = args.limit_sheets or 20
 
     print()
-    print("将使用以下默认参数处理：")
+    print(f"配置文件：{get_config_path()}")
+    print("将使用以下配置处理：")
     print(f"  workbook: {args.workbook}")
     print(f"  current-date: {args.current_date}")
-    print("  colored-sheets: yes")
-    print("  fast-xml: yes")
+    print(f"  colored-sheets: {'yes' if args.colored_sheets else 'no'}")
+    print(f"  fast-xml: {'yes' if args.fast_xml else 'no'}")
     print(f"  limit-sheets: {args.limit_sheets}")
-    print("  run-until-done: yes")
+    print(f"  run-until-done: {'yes' if args.run_until_done else 'no'}")
     print()
     return args
 
@@ -238,9 +319,14 @@ def write_error_log(error: BaseException) -> Path:
 
 def main() -> None:
     args = parse_args()
+    config = load_config()
+    args = apply_config_defaults(args, config)
 
     if args.interactive:
-        args = apply_interactive_fill_defaults(args)
+        args = apply_interactive_fill_defaults(args, config)
+
+    if args.workbook is None:
+        args.workbook = DATA_FILE
 
     if args.list_sheets:
         for sheet_name in list_sheet_names(args.workbook):
