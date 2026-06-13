@@ -7,6 +7,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import tempfile
+from typing import Callable
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -364,6 +365,7 @@ def add_current_date_to_colored_sheets_fast(
     xlsx_path: Path,
     current_date: date,
     limit_sheets: int,
+    progress: Callable[[str], None] | None = None,
 ) -> FastBatchResult:
     entries = list_sheets(xlsx_path)
     changed: list[tuple[str, int]] = []
@@ -371,9 +373,13 @@ def add_current_date_to_colored_sheets_fast(
     modified_xml: dict[str, bytes] = {}
 
     with zipfile.ZipFile(xlsx_path, "r") as archive:
-        for entry in entries:
+        total_entries = len(entries)
+        for index, entry in enumerate(entries, start=1):
             if len(changed) >= limit_sheets:
                 break
+
+            if progress is not None:
+                progress(f"  scanning sheet {index}/{total_entries}: {entry.name}")
 
             xml_bytes = archive.read(entry.path)
             new_xml, inserted_row, reason = _add_current_date_to_sheet_xml(xml_bytes, current_date)
@@ -388,6 +394,9 @@ def add_current_date_to_colored_sheets_fast(
         if not modified_xml:
             return FastBatchResult(changed=changed, skipped=skipped)
 
+        if progress is not None:
+            progress(f"  writing workbook: {len(changed)} sheet(s) changed...")
+
         modified_xml["xl/workbook.xml"] = _force_full_calculation(archive.read("xl/workbook.xml"))
 
         fd, tmp_name = tempfile.mkstemp(
@@ -401,9 +410,17 @@ def add_current_date_to_colored_sheets_fast(
             with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as output:
                 for item in archive.infolist():
                     output.writestr(item, modified_xml.get(item.filename, archive.read(item.filename)))
-            os.replace(tmp_path, xlsx_path)
-        finally:
+        except Exception:
             if tmp_path.exists():
                 tmp_path.unlink()
+            raise
+
+    try:
+        if progress is not None:
+            progress("  replacing original workbook...")
+        os.replace(tmp_path, xlsx_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
     return FastBatchResult(changed=changed, skipped=skipped)

@@ -438,6 +438,7 @@ def main() -> None:
                     xlsx_path=args.workbook,
                     current_date=current_date,
                     limit_sheets=args.limit_sheets or 20,
+                    progress=lambda message: print(message, flush=True),
                 )
                 changed_count = len(result.changed)
                 summary.changed.extend(result.changed)
