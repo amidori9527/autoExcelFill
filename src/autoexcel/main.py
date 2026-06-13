@@ -5,6 +5,7 @@ import configparser
 import re
 import sys
 import traceback
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
@@ -20,6 +21,20 @@ DATA_FILE = PROJECT_ROOT / "data.xlsx"
 EXAMPLE_SHEET = "example"
 WORKSPACE_DIR_NAME = "workspace"
 CONFIG_FILE_NAME = "config.ini"
+
+
+@dataclass
+class FillSummary:
+    workbook: Path
+    current_date: date
+    log_path: Path
+    changed: list[tuple[str, int]] = field(default_factory=list)
+    skipped_count: int = 0
+    batch_count: int = 0
+
+    @property
+    def changed_count(self) -> int:
+        return len(self.changed)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -173,6 +188,17 @@ def resolve_current_date(args: argparse.Namespace) -> date:
     return date.today()
 
 
+def choose_date_mode() -> str:
+    today_text = date.today().strftime("%Y-%m-%d")
+    while True:
+        raw_value = input(f"目标日期：1=今天({today_text})，2=手动输入，直接回车默认 1：").strip()
+        if raw_value in {"", "1"}:
+            return today_text
+        if raw_value == "2":
+            return choose_current_date()
+        print("请输入 1 或 2。")
+
+
 def format_file_size(path: Path) -> str:
     size = path.stat().st_size
     for unit in ("B", "KB", "MB", "GB"):
@@ -279,7 +305,7 @@ def choose_current_date() -> str:
     default_date = date.today().strftime("%Y-%m-%d")
     while True:
         raw_value = input(
-            f"目标日期，直接回车默认今天 {default_date}；示例：2026-06-10、0610、06-10、05/12："
+            f"请输入目标日期，直接回车默认今天 {default_date}；示例：2026-06-10、0610、06-10、05/12："
         ).strip()
         selected_value = raw_value or default_date
         try:
@@ -296,10 +322,7 @@ def apply_interactive_fill_defaults(
     select_workbook = parse_bool(config.get("select_workbook", "true"), "select_workbook")
     if select_workbook or args.workbook is None:
         args.workbook = choose_workbook_from_current_directory()
-    if args.current_date is None:
-        args.current_date = date.today().strftime("%Y-%m-%d")
-    else:
-        args.current_date = parse_date(args.current_date).strftime("%Y-%m-%d")
+    args.current_date = choose_date_mode()
     args.freeze_next_day_row = True
     args.limit_sheets = args.limit_sheets or 20
 
@@ -340,6 +363,36 @@ def write_error_log(error: BaseException) -> Path:
     return log_path
 
 
+def create_process_log_path() -> Path:
+    log_dir = get_executable_directory() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return log_dir / f"autoexcel-fill-{timestamp}.log"
+
+
+def append_log(log_path: Path, message: str) -> None:
+    with log_path.open("a", encoding="utf-8") as log_file:
+        log_file.write(message.rstrip() + "\n")
+
+
+def print_fill_summary(summary: FillSummary) -> None:
+    print()
+    print("处理完成")
+    print("----------------------------------------")
+    print(f"Workbook: {summary.workbook}")
+    print(f"目标日期: {summary.current_date:%Y-%m-%d}")
+    print(f"处理批次: {summary.batch_count}")
+    print(f"成功处理 sheet 数: {summary.changed_count}")
+    print(f"跳过 sheet 数: {summary.skipped_count}")
+    if summary.changed:
+        print("已处理 sheet:")
+        for sheet_name, row in summary.changed:
+            print(f"  - {sheet_name}，行 {row}")
+    else:
+        print("已处理 sheet: 无")
+    print(f"详细日志: {summary.log_path}")
+
+
 def main() -> None:
     args = parse_args()
     config = load_config()
@@ -358,33 +411,50 @@ def main() -> None:
 
     if args.freeze_next_day_row:
         current_date = resolve_current_date(args)
+        log_path = create_process_log_path()
+        summary = FillSummary(workbook=args.workbook, current_date=current_date, log_path=log_path)
+        append_log(log_path, "Excel 数据填报详细日志")
+        append_log(log_path, f"开始时间: {datetime.now():%Y-%m-%d %H:%M:%S}")
+        append_log(log_path, f"Workbook: {args.workbook}")
+        append_log(log_path, f"目标日期: {current_date:%Y-%m-%d}")
+        append_log(log_path, f"配置文件: {get_config_path()}")
+        append_log(log_path, f"colored_sheets: {args.colored_sheets}")
+        append_log(log_path, f"fast_xml: {args.fast_xml}")
+        append_log(log_path, f"limit_sheets: {args.limit_sheets or 20}")
+        append_log(log_path, f"run_until_done: {args.run_until_done}")
+        append_log(log_path, "")
+
         if args.fast_xml:
             if not args.colored_sheets:
                 raise ValueError("--fast-xml currently requires --colored-sheets")
-            total_changed = 0
             batch_number = 0
             while True:
                 batch_number += 1
+                summary.batch_count = batch_number
                 print(f"Batch {batch_number}: 正在读取并处理 workbook，请不要打开 Excel 文件...")
                 sys.stdout.flush()
+                append_log(log_path, f"Batch {batch_number}: 开始处理")
                 result = add_current_date_to_colored_sheets_fast(
                     xlsx_path=args.workbook,
                     current_date=current_date,
                     limit_sheets=args.limit_sheets or 20,
                 )
                 changed_count = len(result.changed)
-                total_changed += changed_count
-                print(
-                    f"Batch {batch_number}: changed {changed_count}, "
-                    f"skipped {len(result.skipped)}."
-                )
+                summary.changed.extend(result.changed)
+                summary.skipped_count += len(result.skipped)
+                print(f"Batch {batch_number}: changed {changed_count}, skipped {len(result.skipped)}.")
+                append_log(log_path, f"Batch {batch_number}: changed {changed_count}, skipped {len(result.skipped)}")
                 for sheet_name, row in result.changed:
-                    print(f"  changed: {sheet_name} row {row}")
+                    append_log(log_path, f"  changed: {sheet_name} row {row}")
+                for sheet_name, reason in result.skipped:
+                    append_log(log_path, f"  skipped: {sheet_name} ({reason})")
+                append_log(log_path, "")
 
                 if not args.run_until_done or changed_count == 0:
                     if changed_count == 0:
-                        print("No more matching colored sheets to change.")
-                    print(f"Total changed: {total_changed}")
+                        append_log(log_path, "没有更多可处理的彩色标签 sheet。")
+                    append_log(log_path, f"结束时间: {datetime.now():%Y-%m-%d %H:%M:%S}")
+                    print_fill_summary(summary)
                     break
             return
 
@@ -410,14 +480,17 @@ def main() -> None:
                 limit_sheets=args.limit_sheets,
             )
             workbook.save(args.workbook)
-            print(f"Changed {len(changed)} colored sheets.")
+            summary.batch_count = 1
+            summary.changed.extend(changed)
+            summary.skipped_count += len(skipped)
+            append_log(log_path, f"Changed {len(changed)} colored sheets.")
             for sheet_name, row in changed:
-                print(f"  changed: {sheet_name} row {row}")
-            print(f"Skipped {len(skipped)} colored sheets.")
-            for sheet_name, reason in skipped[:50]:
-                print(f"  skipped: {sheet_name} ({reason})")
-            if len(skipped) > 50:
-                print(f"  ... {len(skipped) - 50} more skipped")
+                append_log(log_path, f"  changed: {sheet_name} row {row}")
+            append_log(log_path, f"Skipped {len(skipped)} colored sheets.")
+            for sheet_name, reason in skipped:
+                append_log(log_path, f"  skipped: {sheet_name} ({reason})")
+            append_log(log_path, f"结束时间: {datetime.now():%Y-%m-%d %H:%M:%S}")
+            print_fill_summary(summary)
             return
 
         inserted_row = freeze_next_day_row(
@@ -427,7 +500,11 @@ def main() -> None:
             current_date=current_date,
         )
         workbook.save(args.workbook)
-        print(f"Inserted row {inserted_row} in sheet '{args.sheet}' and pasted source row as values.")
+        summary.batch_count = 1
+        summary.changed.append((args.sheet, inserted_row))
+        append_log(log_path, f"changed: {args.sheet} row {inserted_row}")
+        append_log(log_path, f"结束时间: {datetime.now():%Y-%m-%d %H:%M:%S}")
+        print_fill_summary(summary)
         return
 
     preview = preview_sheet(args.workbook, args.sheet, max_rows=args.rows)
