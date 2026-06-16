@@ -6,7 +6,7 @@ import re
 import sys
 import traceback
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -70,7 +70,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--current-date",
-        help="Current date to add. If omitted, defaults to today's date.",
+        help="Current date to add. If omitted, defaults to yesterday.",
     )
     parser.add_argument(
         "--limit-sheets",
@@ -182,18 +182,24 @@ def parse_date(value: str) -> date:
     raise ValueError("日期格式不对，请输入 2026-06-10、0610、06-10 或 05/12")
 
 
+def default_target_date() -> date:
+    return date.today() - timedelta(days=1)
+
+
 def resolve_current_date(args: argparse.Namespace) -> date:
     if args.current_date:
         return parse_date(args.current_date)
-    return date.today()
+    return default_target_date()
 
 
 def choose_date_mode() -> str:
-    today_text = date.today().strftime("%Y-%m-%d")
+    default_text = default_target_date().strftime("%Y-%m-%d")
     while True:
-        raw_value = input(f"目标日期：1=今天({today_text})，2=手动输入，直接回车默认 1：").strip()
+        raw_value = input(
+            f"目标日期：1=默认前一天({default_text})，2=手动输入，直接回车默认 1："
+        ).strip()
         if raw_value in {"", "1"}:
-            return today_text
+            return default_text
         if raw_value == "2":
             return choose_current_date()
         print("请输入 1 或 2。")
@@ -302,10 +308,10 @@ def choose_workbook_from_current_directory() -> Path:
 
 
 def choose_current_date() -> str:
-    default_date = date.today().strftime("%Y-%m-%d")
+    default_date = default_target_date().strftime("%Y-%m-%d")
     while True:
         raw_value = input(
-            f"请输入目标日期，直接回车默认今天 {default_date}；示例：2026-06-10、0610、06-10、05/12："
+            f"请输入目标日期，直接回车默认前一天 {default_date}；示例：2026-06-10、0610、06-10、05/12："
         ).strip()
         selected_value = raw_value or default_date
         try:

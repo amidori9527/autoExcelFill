@@ -32,7 +32,8 @@ PYTHONPATH=src .venv/bin/python -m autoexcel.main
 
 Put the target `.xlsx` file into the `workspace` folder next to the packaged
 executable, then run the executable directly. The tool will list workbooks in
-that folder and ask whether to use today's date or enter a date manually.
+that folder and ask whether to use the default date or enter a date manually.
+The default date is yesterday based on the computer's current date.
 
 Default behavior is controlled by `config.ini` next to the executable. Users can
 edit it with a text editor to set `target_date`, `limit_sheets`, `workbook`, and
