@@ -3,11 +3,13 @@ __pycache__/
 *.py[cod]
 .DS_Store
 build/
+dist/
 outputs/
 autoexcel-fill-error.log
+diff-orders-error.log
 logs/
+result/
 *.zip
 workspace/*.xlsx
 workspace/**/*.xlsx
-dist/**/workspace/*.xlsx
 ~$*.xlsx

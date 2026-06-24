@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --border: #d9dde3;
+      --header: #f3f5f7;
+      --ink: #20242a;
+      --muted: #69717d;
+      --accent: #0f766e;
+      --page: #f7f8fa;
+      --surface: #ffffff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+      background: var(--page);
+    }
+
+    main {
+      max-width: 1320px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    h1 {
+      margin: 0 0 16px;
+      font-size: 24px;
+      line-height: 1.25;
+      font-weight: 700;
+    }
+
+    .metric {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 10px;
+      margin: 0;
+      padding: 12px 16px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .metric strong {
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 18px;
+    }
+
+    .copy-all {
+      min-height: 44px;
+      border: 1px solid #0f766e;
+      border-radius: 8px;
+      padding: 0 18px;
+      color: #fff;
+      background: var(--accent);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .copy-all:hover {
+      background: #0b665f;
+    }
+
+    .panel {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .panel h2 {
+      margin: 0;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--header);
+      font-size: 18px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid #edf0f3;
+      border-right: 1px solid #edf0f3;
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: middle;
+      font-size: 14px;
+      word-break: break-all;
+    }
+
+    th:last-child,
+    td:last-child {
+      border-right: 0;
+    }
+
+    th {
+      color: #4b5563;
+      background: #fafbfc;
+      font-weight: 600;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .order-check {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+      min-height: 24px;
+    }
+
+    .order-check input {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    button.copy-order {
+      min-width: 0;
+      border: 0;
+      padding: 0;
+      color: var(--accent);
+      background: transparent;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .empty {
+      padding: 18px;
+      color: var(--muted);
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 28px;
+      transform: translateX(-50%);
+      min-width: 220px;
+      max-width: calc(100vw - 48px);
+      padding: 12px 18px;
+      border-radius: 8px;
+      background: #111827;
+      color: #fff;
+      text-align: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+      box-shadow: 0 10px 25px rgba(17, 24, 39, 0.18);
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translate(-50%, -6px);
+    }
+
+    @media (max-width: 920px) {
+      main {
+        padding: 16px;
+      }
+
+      .toolbar {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      th,
+      td {
+        font-size: 13px;
+        padding: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>{{ title }}</h1>
+    <div class="toolbar">
+      <div class="metric"><span>上游独有订单数</span><strong>{{ upstream_only_count }}</strong></div>
+      <button id="copyAllOrders" class="copy-all" type="button">一键复制ID</button>
+    </div>
+    <section class="panel">
+      <h2>上游独有订单ID</h2>
+      {{ upstream_only_table }}
+    </section>
+  </main>
+  <div id="toast" class="toast">已复制订单号</div>
+  <script>
+    const STORAGE_KEY = 'autoexcel.upstreamOnly.checked.v1';
+    const upstreamOnlyOrders = {{ upstream_only_json }};
+    const toast = document.getElementById('toast');
+    const copyAllOrders = document.getElementById('copyAllOrders');
+    let toastTimer = null;
+
+    function readCheckedMap() {
+      try {
+        return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+      } catch (error) {
+        return {};
+      }
+    }
+
+    function writeCheckedMap(checkedMap) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(checkedMap));
+    }
+
+    function setOrderChecked(orderId, checked) {
+      const checkedMap = readCheckedMap();
+      if (checked) {
+        checkedMap[orderId] = true;
+      } else {
+        delete checkedMap[orderId];
+      }
+      writeCheckedMap(checkedMap);
+      document.querySelectorAll(`[data-check-order-id="${CSS.escape(orderId)}"]`).forEach((checkbox) => {
+        checkbox.checked = checked;
+      });
+    }
+
+    function setOrdersChecked(orderIds, checked) {
+      const checkedMap = readCheckedMap();
+      orderIds.forEach((orderId) => {
+        if (checked) {
+          checkedMap[orderId] = true;
+        } else {
+          delete checkedMap[orderId];
+        }
+      });
+      writeCheckedMap(checkedMap);
+      document.querySelectorAll('[data-check-order-id]').forEach((checkbox) => {
+        checkbox.checked = checkedMap[checkbox.dataset.checkOrderId] === true;
+      });
+    }
+
+    function restoreCheckedState() {
+      const checkedMap = readCheckedMap();
+      document.querySelectorAll('[data-check-order-id]').forEach((checkbox) => {
+        checkbox.checked = checkedMap[checkbox.dataset.checkOrderId] === true;
+      });
+    }
+
+    function showToast(orderId) {
+      toast.textContent = `已复制订单号：${orderId}`;
+      toast.classList.add('show');
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => toast.classList.remove('show'), 1600);
+    }
+
+    function showMessage(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => toast.classList.remove('show'), 1600);
+    }
+
+    async function copyText(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (error) {
+        const input = document.createElement('textarea');
+        input.value = text;
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand('copy');
+        input.remove();
+      }
+    }
+
+    async function copyOrder(orderId) {
+      await copyText(orderId);
+      setOrderChecked(orderId, true);
+      showToast(orderId);
+    }
+
+    async function copyAllOrderIds() {
+      if (upstreamOnlyOrders.length === 0) {
+        showMessage('没有可复制的订单号');
+        return;
+      }
+      await copyText(upstreamOnlyOrders.join('\n'));
+      setOrdersChecked(upstreamOnlyOrders, true);
+      showMessage(`已复制 ${upstreamOnlyOrders.length} 个订单号`);
+    }
+
+    document.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-order-id]');
+      if (!button) return;
+      copyOrder(button.dataset.orderId);
+    });
+
+    document.addEventListener('change', (event) => {
+      const checkbox = event.target.closest('[data-check-order-id]');
+      if (!checkbox) return;
+      setOrderChecked(checkbox.dataset.checkOrderId, checkbox.checked);
+    });
+
+    copyAllOrders.addEventListener('click', copyAllOrderIds);
+
+    restoreCheckedState();
+  </script>
+</body>
+</html>

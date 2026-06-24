@@ -53,5 +53,5 @@ Put `上游.xlsx` and `后台.xlsx` into `workspace/diffOrders`, then run:
 PYTHONPATH=src python3 -m autoexcel.diff_orders
 ```
 
-The demo compares `上游.xlsx` column L with `后台.xlsx` column D and writes
-`workspace/diffOrders/diff_result.xlsx`.
+The demo compares `上游.xlsx` column L with `后台.xlsx` column D and writes an
+HTML table result into the `result` folder.
