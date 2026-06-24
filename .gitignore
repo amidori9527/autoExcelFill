@@ -8,5 +8,6 @@ autoexcel-fill-error.log
 logs/
 *.zip
 workspace/*.xlsx
+workspace/**/*.xlsx
 dist/**/workspace/*.xlsx
 ~$*.xlsx

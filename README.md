@@ -44,3 +44,14 @@ Before running the fill operation, close the workbook in Excel/WPS. If the
 program fails, it writes details to `autoexcel-fill-error.log` next to the
 executable. Successful runs write detailed processing logs to the `logs` folder
 next to the executable.
+
+## Diff Orders Demo
+
+Put `上游.xlsx` and `后台.xlsx` into `workspace/diffOrders`, then run:
+
+```bash
+PYTHONPATH=src python3 -m autoexcel.diff_orders
+```
+
+The demo compares `上游.xlsx` column L with `后台.xlsx` column D and writes
+`workspace/diffOrders/diff_result.xlsx`.
