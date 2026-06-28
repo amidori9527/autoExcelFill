@@ -303,12 +303,20 @@ def write_html_result(result_dir: Path, template_path: Path, result: DiffResult)
 
 
 def copy_to_clipboard(text: str) -> bool:
-    try:
-        process = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
-        process.communicate(input=text.encode("utf-8"))
-        return process.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
+    if sys.platform == "win32":
+        commands = (["clip"],)
+    elif sys.platform == "darwin":
+        commands = (["pbcopy"],)
+    else:
+        commands = (["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"])
+
+    for command in commands:
+        try:
+            subprocess.run(command, input=text, text=True, check=True)
+            return True
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return False
 
 
 def should_pause_before_exit() -> bool:

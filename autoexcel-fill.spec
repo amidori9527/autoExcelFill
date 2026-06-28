@@ -79,10 +79,10 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='autoexcel',
+    name='AutoExcelKit',
 )
 
-Path(DISTPATH, 'autoexcel', 'workspace').mkdir(parents=True, exist_ok=True)
-Path(DISTPATH, 'autoexcel', 'workspace', 'diffOrders').mkdir(parents=True, exist_ok=True)
-Path(DISTPATH, 'autoexcel', 'result').mkdir(parents=True, exist_ok=True)
-copy2('config.ini', Path(DISTPATH, 'autoexcel', 'config.ini'))
+Path(DISTPATH, 'AutoExcelKit', 'workspace').mkdir(parents=True, exist_ok=True)
+Path(DISTPATH, 'AutoExcelKit', 'workspace', 'diffOrders').mkdir(parents=True, exist_ok=True)
+Path(DISTPATH, 'AutoExcelKit', 'result').mkdir(parents=True, exist_ok=True)
+copy2('config.ini', Path(DISTPATH, 'AutoExcelKit', 'config.ini'))
