@@ -2,10 +2,12 @@
 set -e
 
 SCRIPT_DIR="${0:A:h}"
-if [[ -x "$SCRIPT_DIR/autoexcel/autoexcel-fill" ]]; then
+if [[ -x "$SCRIPT_DIR/AutoExcelKit/autoexcel-fill" ]]; then
+  BIN="$SCRIPT_DIR/AutoExcelKit/autoexcel-fill"
+elif [[ -x "$SCRIPT_DIR/autoexcel/autoexcel-fill" ]]; then
   BIN="$SCRIPT_DIR/autoexcel/autoexcel-fill"
 else
-  BIN="$SCRIPT_DIR/dist/autoexcel/autoexcel-fill"
+  BIN="$SCRIPT_DIR/dist/AutoExcelKit/autoexcel-fill"
 fi
 
 cd "$SCRIPT_DIR"

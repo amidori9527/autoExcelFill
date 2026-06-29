@@ -2,10 +2,12 @@
 set -e
 
 SCRIPT_DIR="${0:A:h}"
-if [[ -x "$SCRIPT_DIR/autoexcel/diff-orders" ]]; then
+if [[ -x "$SCRIPT_DIR/AutoExcelKit/diff-orders" ]]; then
+  BIN="$SCRIPT_DIR/AutoExcelKit/diff-orders"
+elif [[ -x "$SCRIPT_DIR/autoexcel/diff-orders" ]]; then
   BIN="$SCRIPT_DIR/autoexcel/diff-orders"
 else
-  BIN="$SCRIPT_DIR/dist/autoexcel/diff-orders"
+  BIN="$SCRIPT_DIR/dist/AutoExcelKit/diff-orders"
 fi
 
 cd "$SCRIPT_DIR"

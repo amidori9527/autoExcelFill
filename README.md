@@ -33,7 +33,7 @@ PYTHONPATH=src .venv/bin/python -m autoexcel.main
 Put the target `.xlsx` file into the `workspace` folder next to the packaged
 executable, then run the executable directly. The tool will list workbooks in
 that folder and ask whether to use the default date or enter a date manually.
-The default date is yesterday based on the computer's current date.
+The fill tool's default date remains based on its existing logic.
 
 Default behavior is controlled by `config.ini` next to the executable. Users can
 edit it with a text editor to set `target_date`, `limit_sheets`, `workbook`, and
@@ -45,13 +45,28 @@ program fails, it writes details to `autoexcel-fill-error.log` next to the
 executable. Successful runs write detailed processing logs to the `logs` folder
 next to the executable.
 
-## Diff Orders Demo
+## Diff Orders
 
-Put `上游.xlsx` and `后台.xlsx` into `workspace/diffOrders`, then run:
+Put the upstream and backend workbooks into `workspace/diffOrders`, then run:
 
 ```bash
 PYTHONPATH=src python3 -m autoexcel.diff_orders
 ```
 
-The demo compares `上游.xlsx` column L with `后台.xlsx` column D and writes an
-HTML table result into the `result` folder.
+The tool asks for a target date, defaults to today, then automatically
+selects files by name:
+
+- upstream: `TranDetailReport_<id>_<YYYYMMDD...>.xlsx`
+- backend: `收款订单_<YYYYMMDD...>.xlsx`
+
+It compares upstream column L order IDs and H amounts with backend column D
+order IDs, G amounts, and I fees, then writes a statistics HTML result into the
+`result` folder.
+
+When more than one upstream/backend group matches the date, the tool compares
+all groups in batch, writes one summary HTML result, and opens it automatically.
+Batch mode does not copy order IDs to the clipboard automatically.
+
+Set `[diff_orders] auto_open_html = false` in `config.ini` to stop automatically
+opening the generated HTML. Result HTML filenames include the comparison folder
+name, for example `order_diff_jz663_YYYYMMDD_HHMMSS.html`.
