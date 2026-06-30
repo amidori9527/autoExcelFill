@@ -33,4 +33,5 @@
 - 运行前请关闭正在处理的 Excel/WPS 文件。
 - 如果填表出错，请查看 autoexcel-fill-error.log。
 - 如果对账出错，请查看 diff-orders-error.log。
+- 如果拉取订单出错，请查看 fetch-orders-error.log。
 - loginConf.ini 包含账号、密码和 token，请妥善保管，不要发送给任何人。

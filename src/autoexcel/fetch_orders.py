@@ -18,8 +18,6 @@ from urllib.request import Request, urlopen
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_FILE_NAME = "config.ini"
 LOGIN_CONFIG_FILE_NAME = "loginConf.ini"
-DEFAULT_RESULT_DIR = PROJECT_ROOT / "result"
-DEFAULT_DIFF_ORDERS_DIR = PROJECT_ROOT / "workspace" / "diffOrders"
 UPSTREAM_LOGIN_SECTION = "upstream_server_login"
 UPSTREAM_SESSION_SECTION = "upstream_server_session"
 LEGACY_FETCH_LOGIN_SECTION = "fetch_orders_login"
@@ -75,6 +73,10 @@ def get_executable_directory() -> Path:
     if is_frozen_app():
         return Path(sys.executable).resolve().parent
     return PROJECT_ROOT
+
+
+def get_default_download_dir() -> Path:
+    return get_executable_directory() / "workspace" / "diffOrders"
 
 
 def get_config_path() -> Path:
@@ -146,7 +148,7 @@ def resolve_project_path(value: str, default_path: Path) -> Path:
     path = Path(raw_value).expanduser()
     if path.is_absolute():
         return path
-    return PROJECT_ROOT / path
+    return get_executable_directory() / path
 
 
 def required_value(config: configparser.SectionProxy, key: str, file_name: str, section_name: str) -> str:
@@ -180,7 +182,7 @@ def load_fetch_orders_config() -> FetchOrdersConfig:
         report_url=required_value(config, "report_url", CONFIG_FILE_NAME, "fetch_orders"),
         scheduled_reports_url=required_value(config, "scheduled_reports_url", CONFIG_FILE_NAME, "fetch_orders"),
         download_url=required_value(config, "download_url", CONFIG_FILE_NAME, "fetch_orders"),
-        download_dir=resolve_project_path(config.get("download_dir", ""), DEFAULT_DIFF_ORDERS_DIR),
+        download_dir=resolve_project_path(config.get("download_dir", ""), get_default_download_dir()),
         report_name=config.get("report_name", "TransactionDetailReport").strip() or "TransactionDetailReport",
         transaction_status=config.get("transaction_status", "Completed").strip() or "Completed",
     )
@@ -518,6 +520,26 @@ def ask_generate_new_report() -> bool:
         print("请输入 y 或 n；直接回车表示不生成，使用最近已生成文件。")
 
 
+def should_pause_before_exit() -> bool:
+    return is_frozen_app() and sys.stdin.isatty()
+
+
+def pause_before_exit() -> None:
+    if not should_pause_before_exit():
+        return
+    try:
+        input("\n按回车退出...")
+    except EOFError:
+        pass
+
+
+def write_error_log(error: BaseException) -> Path:
+    log_path = get_executable_directory() / "fetch-orders-error.log"
+    log_text = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    log_path.write_text(log_text, encoding="utf-8")
+    return log_path
+
+
 def update_login_config_session(
     session: PortalSession,
     login_status_code: int,
@@ -610,8 +632,7 @@ def main() -> None:
     if response_success(status_code, body):
         print(f"登录请求完成，HTTP 状态码：{status_code}")
     else:
-        print(f"登录可能失败，HTTP 状态码：{status_code}。请查看保存的响应文件。")
-        raise SystemExit(1)
+        raise RuntimeError(f"登录可能失败，HTTP 状态码：{status_code}。响应：{body}")
 
     session = extract_portal_session(body)
     login_config_path = update_login_config_session(session, status_code)
@@ -631,8 +652,7 @@ def main() -> None:
         if response_success(schedule_status_code, schedule_body):
             print(f"报表查询完成，HTTP 状态码：{schedule_status_code}")
         else:
-            print(f"报表查询可能失败，HTTP 状态码：{schedule_status_code}。")
-            raise SystemExit(1)
+            raise RuntimeError(f"报表查询可能失败，HTTP 状态码：{schedule_status_code}。响应：{schedule_body}")
     else:
         print("本次不生成新 Excel，改用最近已生成的可下载文件。")
 
@@ -651,8 +671,7 @@ def main() -> None:
     if response_success(scheduled_status_code, scheduled_body):
         print(f"已调度报表查询完成，HTTP 状态码：{scheduled_status_code}，记录数：{scheduled_count}")
     else:
-        print(f"已调度报表查询可能失败，HTTP 状态码：{scheduled_status_code}。")
-        raise SystemExit(1)
+        raise RuntimeError(f"已调度报表查询可能失败，HTTP 状态码：{scheduled_status_code}。响应：{scheduled_body}")
 
     latest_report = choose_latest_report(scheduled_reports)
     print(f"准备下载最近生成的 Excel：{latest_report.file_name}")
@@ -682,11 +701,26 @@ if __name__ == "__main__":
     exit_code = 0
     try:
         main()
+    except KeyboardInterrupt:
+        print("\n已取消。")
+        exit_code = 130
     except (RuntimeError, ValueError) as error:
         print(f"错误：{error}")
+        try:
+            log_path = write_error_log(error)
+            print(f"详细错误已写入：{log_path}")
+        except Exception:
+            pass
         exit_code = 1
-    except Exception:
-        print("程序执行失败：")
-        traceback.print_exc()
+    except Exception as error:
+        try:
+            log_path = write_error_log(error)
+            print(f"程序执行失败：{error}")
+            print(f"详细错误已写入：{log_path}")
+        except Exception:
+            print("程序执行失败，并且写入错误日志时也失败：")
+            traceback.print_exc()
         exit_code = 1
+    finally:
+        pause_before_exit()
     sys.exit(exit_code)
