@@ -3,7 +3,7 @@
 1. 解压 AutoExcelKit-Windows.zip
 2. 填表：把需要处理的 .xlsx 文件放入 AutoExcelKit\workspace 文件夹
 3. 对账：把上游和后台 .xlsx 文件放入 AutoExcelKit\workspace\diffOrders 文件夹
-4. 拉取订单：先打开 FetchOrders用户操作说明.html，按说明准备 loginConf.ini
+4. 拉取订单：先打开 fetch-orders-user-guide.html，按说明准备 loginConf.ini
 5. 填表双击 run-autoexcel-fill.bat；对账双击 run-diff-orders.bat；拉取订单双击 run-fetch-orders.bat
 
 默认配置：

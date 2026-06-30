@@ -121,4 +121,4 @@ Path(DISTPATH, 'AutoExcelKit', 'workspace', 'diffOrders').mkdir(parents=True, ex
 Path(DISTPATH, 'AutoExcelKit', 'result').mkdir(parents=True, exist_ok=True)
 copy2('config.ini', Path(DISTPATH, 'AutoExcelKit', 'config.ini'))
 copy2('loginConf.example.ini', Path(DISTPATH, 'AutoExcelKit', 'loginConf.example.ini'))
-copy2('FetchOrders用户操作说明.html', Path(DISTPATH, 'AutoExcelKit', 'FetchOrders用户操作说明.html'))
+copy2('fetch-orders-user-guide.html', Path(DISTPATH, 'AutoExcelKit', 'fetch-orders-user-guide.html'))
