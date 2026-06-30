@@ -1,3 +1,5 @@
+版本：AutoExcelKit 0.1.0
+
 使用方法：
 
 1. 解压 AutoExcelKit-macOS.zip

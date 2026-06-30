@@ -16,6 +16,8 @@ import traceback
 from typing import Any, Callable
 
 from openpyxl import load_workbook
+
+from autoexcel.version import version_text
 from openpyxl.utils import column_index_from_string
 
 
@@ -368,6 +370,7 @@ def choose_diff_jobs_interactive() -> list[DiffJob]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare upstream/backend order IDs.")
+    parser.add_argument("--version", action="version", version=version_text("diff-orders"))
     parser.add_argument("--a", type=Path, default=None, help="A (上游) workbook path.")
     parser.add_argument("--b", type=Path, default=None, help="B (后台) workbook path.")
     parser.add_argument("--a-col", default="L", help="A order ID column. Default: L")

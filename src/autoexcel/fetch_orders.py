@@ -14,6 +14,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
+from autoexcel.version import version_text
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_FILE_NAME = "config.ini"
@@ -619,6 +621,7 @@ def response_success(status_code: int, body: Any) -> bool:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch order Excel files for diffOrders.")
+    parser.add_argument("--version", action="version", version=version_text("fetch-orders"))
     parser.add_argument("--config", type=Path, help="Reserved for future use; currently reads config.ini automatically.")
     parser.add_argument("--date", help="Target report date. Defaults to yesterday. Examples: 2026-06-28, 0628, 06-28.")
     return parser.parse_args(argv)

@@ -13,6 +13,7 @@ from openpyxl import load_workbook
 
 from autoexcel.fast_xlsx import add_current_date_to_colored_sheets_fast
 from autoexcel.operations import freeze_colored_sheets_next_day, freeze_next_day_row
+from autoexcel.version import version_text
 from autoexcel.workbook_io import list_sheet_names, preview_sheet
 
 
@@ -39,6 +40,7 @@ class FillSummary:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Inspect and automate data.xlsx.")
+    parser.add_argument("--version", action="version", version=version_text("autoexcel-fill"))
     parser.add_argument("--workbook", type=Path, default=None)
     parser.add_argument("--sheet", default=EXAMPLE_SHEET)
     parser.add_argument("--rows", type=int, default=10)
