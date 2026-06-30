@@ -1,4 +1,4 @@
-版本：AutoExcelKit 0.1.0
+版本：AutoExcelKit 0.1.1
 
 使用方法：
 
@@ -25,7 +25,7 @@
 - 拉取订单 Excel 的普通参数在 config.ini 的 [fetch_orders] 中填写
 - 敏感登录参数请复制 loginConf.example.ini 为 loginConf.ini 后填写
 - 上游服务端参数填 [upstream_server_login]；api_key 已默认填好，用户只需填写 username、password、institution_id
-- fetch-orders.exe 会先登录上游，询问是否生成最新 Excel；直接回车或输入 n 会下载最近已生成文件
+- fetch-orders.exe 会先登录上游，询问是否生成最新 Excel；直接回车或输入 n 后会继续询问下载日期，默认前一天，并下载该日期第一个可下载文件
 - 下载后的 TranDetailReport 会保存到 workspace\diffOrders
 - token 等会话信息会写回 [upstream_server_session]
 

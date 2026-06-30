@@ -487,11 +487,15 @@ def is_downloadable_report(report: ScheduledReport) -> bool:
     )
 
 
-def choose_latest_report(reports: list[ScheduledReport]) -> ScheduledReport:
-    downloadable_reports = [report for report in reports if is_downloadable_report(report)]
-    if not downloadable_reports:
-        raise ValueError("已调度报表列表里没有找到可下载的 Complete Excel。")
-    return max(downloadable_reports, key=lambda report: report.created_at or datetime.min)
+def choose_first_report_for_date(reports: list[ScheduledReport], target_date: date) -> ScheduledReport:
+    for report in reports:
+        if (
+            is_downloadable_report(report)
+            and report.created_at is not None
+            and report.created_at.date() == target_date
+        ):
+            return report
+    raise ValueError(f"已调度报表列表里没有找到 {target_date:%Y-%m-%d} 的可下载 Complete Excel。")
 
 
 def parse_json_error(raw_body: bytes) -> str:
@@ -514,12 +518,12 @@ def ask_generate_new_report() -> bool:
     if not sys.stdin.isatty():
         return False
     while True:
-        raw_value = input("是否需要生成最新的 Excel？输入 y 生成，直接回车或输入 n 使用最近已生成文件：").strip().lower()
+        raw_value = input("是否需要生成最新的 Excel？输入 y 生成，直接回车或输入 n 按日期下载已生成文件：").strip().lower()
         if raw_value in {"", "n", "no"}:
             return False
         if raw_value in {"y", "yes"}:
             return True
-        print("请输入 y 或 n；直接回车表示不生成，使用最近已生成文件。")
+        print("请输入 y 或 n；直接回车表示不生成，按日期下载已生成文件。")
 
 
 def should_pause_before_exit() -> bool:
@@ -641,14 +645,21 @@ def main() -> None:
     login_config_path = update_login_config_session(session, status_code)
     print(f"登录会话信息已写入：{login_config_path}")
 
+    generate_new_report = False
     if args.date:
+        generate_new_report = True
         target_date = resolve_target_date(args.date)
-    elif ask_generate_new_report():
-        target_date = resolve_target_date(None)
     else:
-        target_date = None
+        generate_new_report = ask_generate_new_report()
+        target_date = resolve_target_date(None)
+
+    if generate_new_report:
+        print(f"本次会生成新 Excel，目标日期：{target_date:%Y-%m-%d}")
+    else:
+        print(f"本次不生成新 Excel，查找已生成的 {target_date:%Y-%m-%d} Excel。")
+
     schedule_status_code = None
-    if target_date is not None:
+    if generate_new_report:
         print(f"正在查询报表任务：{target_date:%Y-%m-%d} 00:00-23:59")
         schedule_status_code, schedule_body = post_schedule_ready(config, session, target_date)
         update_login_config_session(session, status_code, schedule_status_code, target_date=target_date)
@@ -656,8 +667,6 @@ def main() -> None:
             print(f"报表查询完成，HTTP 状态码：{schedule_status_code}")
         else:
             raise RuntimeError(f"报表查询可能失败，HTTP 状态码：{schedule_status_code}。响应：{schedule_body}")
-    else:
-        print("本次不生成新 Excel，改用最近已生成的可下载文件。")
 
     print("正在查询已调度报表列表...")
     scheduled_status_code, scheduled_body = post_scheduled_reports(config, session)
@@ -676,16 +685,16 @@ def main() -> None:
     else:
         raise RuntimeError(f"已调度报表查询可能失败，HTTP 状态码：{scheduled_status_code}。响应：{scheduled_body}")
 
-    latest_report = choose_latest_report(scheduled_reports)
-    print(f"准备下载最近生成的 Excel：{latest_report.file_name}")
-    download_status_code, download_headers, download_body = post_download_zip(config, session, latest_report)
+    selected_report = choose_first_report_for_date(scheduled_reports, target_date)
+    print(f"准备下载 {target_date:%Y-%m-%d} 的 Excel：{selected_report.file_name}")
+    download_status_code, download_headers, download_body = post_download_zip(config, session, selected_report)
     content_type = download_headers.get("Content-Type", "")
     if not 200 <= download_status_code < 300:
         raise RuntimeError(f"下载失败，HTTP 状态码：{download_status_code}，响应：{parse_json_error(download_body)}")
     if "json" in content_type.lower() and not download_body.startswith(b"PK"):
         raise RuntimeError(f"下载接口没有返回 Excel 文件，响应：{parse_json_error(download_body)}")
 
-    downloaded_path = save_downloaded_excel(config, latest_report, download_body)
+    downloaded_path = save_downloaded_excel(config, selected_report, download_body)
     update_login_config_session(
         session,
         status_code,
@@ -693,7 +702,7 @@ def main() -> None:
         scheduled_status_code,
         scheduled_count,
         target_date,
-        latest_report,
+        selected_report,
         downloaded_path,
         download_status_code,
     )

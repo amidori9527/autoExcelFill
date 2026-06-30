@@ -81,9 +81,10 @@ PYTHONPATH=src python3 -m autoexcel.fetch_orders
 ```
 
 After login, the command asks whether to generate a fresh Excel report. Choose
-`y` to call `getScheduleReady`; press Enter or choose `n` to use the latest
-scheduled report from `getReportsScheduled`. The selected report is downloaded
-through `downloadZip` into `workspace/diffOrders`.
+`y` to call `getScheduleReady`; press Enter or choose `n` to skip generation,
+enter a download date that defaults to yesterday, then download the first
+available scheduled report for that date through `downloadZip` into
+`workspace/diffOrders`.
 
 It does not print sensitive values to the console; the upstream login token,
 runtime session values, and last downloaded file metadata are written back to

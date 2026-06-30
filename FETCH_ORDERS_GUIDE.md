@@ -123,7 +123,7 @@ dist/AutoExcelKit/loginConf.ini
 登录成功后，会询问：
 
 ```text
-是否需要生成最新的 Excel？输入 y 生成，直接回车或输入 n 使用最近已生成文件：
+是否需要生成最新的 Excel？输入 y 生成，直接回车或输入 n 按日期下载已生成文件：
 ```
 
 ### 选择 y
@@ -149,7 +149,9 @@ dist/AutoExcelKit/loginConf.ini
 
 直接回车或输入 `n` 时，程序不会生成新的 Excel。
 
-它会直接调用 `getReportsScheduled` 获取最近已经生成完成的 Excel 列表，然后选择最新的可下载文件，调用 `downloadZip` 下载。
+它会继续询问需要下载哪一天的数据，直接回车默认前一天。
+
+然后程序会调用 `getReportsScheduled` 获取已经生成完成的 Excel 列表，筛选出该日期的文件，选择列表中的第一个可下载文件，调用 `downloadZip` 下载。
 
 这是日常测试或已经有报表时推荐的方式。
 
@@ -202,7 +204,7 @@ dist/AutoExcelKit/loginConf.ini
 在提示处直接回车，或输入 `n`：
 
 ```text
-是否需要生成最新的 Excel？输入 y 生成，直接回车或输入 n 使用最近已生成文件：
+是否需要生成最新的 Excel？输入 y 生成，直接回车或输入 n 按日期下载已生成文件：
 ```
 
 ### 3. 下载后的 Excel 没有出现在对账目录
