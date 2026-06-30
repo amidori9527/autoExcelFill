@@ -70,3 +70,22 @@ Batch mode does not copy order IDs to the clipboard automatically.
 Set `[diff_orders] auto_open_html = false` in `config.ini` to stop automatically
 opening the generated HTML. Result HTML filenames include the comparison folder
 name, for example `order_diff_jz663_YYYYMMDD_HHMMSS.html`.
+
+## Fetch Orders
+
+Fill non-sensitive `[fetch_orders]` settings in `config.ini`. Copy
+`loginConf.example.ini` to `loginConf.ini`, fill `[upstream_server_login]`, then run:
+
+```bash
+PYTHONPATH=src python3 -m autoexcel.fetch_orders
+```
+
+After login, the command asks whether to generate a fresh Excel report. Choose
+`y` to call `getScheduleReady`; press Enter or choose `n` to use the latest
+scheduled report from `getReportsScheduled`. The selected report is downloaded
+through `downloadZip` into `workspace/diffOrders`.
+
+It does not print sensitive values to the console; the upstream login token,
+runtime session values, and last downloaded file metadata are written back to
+`[upstream_server_session]` in `loginConf.ini`.
+`loginConf.ini` is ignored by git.

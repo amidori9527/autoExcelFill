@@ -3,7 +3,8 @@
 1. 解压 AutoExcelKit-Windows.zip
 2. 填表：把需要处理的 .xlsx 文件放入 AutoExcelKit\workspace 文件夹
 3. 对账：把上游和后台 .xlsx 文件放入 AutoExcelKit\workspace\diffOrders 文件夹
-4. 填表双击 run-autoexcel-fill.bat；对账双击 run-diff-orders.bat
+4. 拉取订单：先打开 FetchOrders用户操作说明.html，按说明准备 loginConf.ini
+5. 填表双击 run-autoexcel-fill.bat；对账双击 run-diff-orders.bat；拉取订单双击 run-fetch-orders.bat
 
 默认配置：
 
@@ -18,6 +19,12 @@
 - 同一天匹配到多组文件时会批量对比，生成汇总 HTML，不自动复制剪贴板
 - 可在 config.ini 的 [diff_orders] 中设置 auto_open_html=false，关闭自动打开 HTML
 - 对账结果 HTML 文件名会带上对比组文件夹名，例如 order_diff_jz663_<时间>.html
+- 拉取订单 Excel 的普通参数在 config.ini 的 [fetch_orders] 中填写
+- 敏感登录参数请复制 AutoExcelKit\loginConf.example.ini 为 AutoExcelKit\loginConf.ini 后填写
+- 上游服务端参数填 [upstream_server_login]；api_key 已默认填好，用户只需填写 username、password、institution_id
+- fetch-orders.exe 会先登录上游，询问是否生成最新 Excel；直接回车或输入 n 会下载最近已生成文件
+- 下载后的 TranDetailReport 会保存到 AutoExcelKit\workspace\diffOrders
+- token 等会话信息会写回 [upstream_server_session]
 
 注意：
 
@@ -25,3 +32,4 @@
 - 运行前请关闭正在处理的 Excel/WPS 文件。
 - 如果填表出错，请查看 AutoExcelKit\autoexcel-fill-error.log。
 - 如果对账出错，请查看 AutoExcelKit\diff-orders-error.log。
+- loginConf.ini 包含账号、密码和 token，请妥善保管，不要发送给任何人。

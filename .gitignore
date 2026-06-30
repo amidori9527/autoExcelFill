@@ -10,6 +10,7 @@ diff-orders-error.log
 logs/
 result/
 *.zip
+loginConf.ini
 workspace/*.xlsx
 workspace/**/*.xlsx
 ~$*.xlsx

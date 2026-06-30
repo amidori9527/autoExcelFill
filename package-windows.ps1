@@ -23,6 +23,8 @@ New-Item -ItemType Directory -Path $ReleaseDir | Out-Null
 Copy-Item -Path (Join-Path $Root "dist\AutoExcelKit") -Destination (Join-Path $ReleaseDir "AutoExcelKit") -Recurse
 Copy-Item -Path (Join-Path $Root "run-autoexcel-fill.bat") -Destination $ReleaseDir
 Copy-Item -Path (Join-Path $Root "run-diff-orders.bat") -Destination $ReleaseDir
+Copy-Item -Path (Join-Path $Root "run-fetch-orders.bat") -Destination $ReleaseDir
+Copy-Item -Path (Join-Path $Root "FetchOrders用户操作说明.html") -Destination $ReleaseDir
 Copy-Item -Path (Join-Path $Root "RELEASE_README_Windows.txt") -Destination (Join-Path $ReleaseDir "README.txt")
 
 if (Test-Path $ZipPath) {

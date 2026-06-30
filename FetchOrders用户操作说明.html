@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fetch Orders 用户操作说明</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --text: #1f2937;
+      --muted: #5f6b7a;
+      --line: #d9e2ec;
+      --blue: #1f5f99;
+      --blue-light: #e9f3fb;
+      --warn: #8a4b00;
+      --warn-bg: #fff3d6;
+      --ok: #116149;
+      --ok-bg: #e8f7f1;
+      --page: #f7f9fb;
+      --panel: #ffffff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+      line-height: 1.7;
+    }
+
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+
+    header {
+      margin-bottom: 22px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      color: #17324d;
+      font-size: 30px;
+      line-height: 1.25;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      color: #17324d;
+      font-size: 22px;
+    }
+
+    h3 {
+      margin: 18px 0 8px;
+      font-size: 18px;
+    }
+
+    p {
+      margin: 8px 0;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    section {
+      margin: 18px 0;
+      padding: 22px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 14px;
+      margin: 16px 0;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+    }
+
+    .step:first-of-type {
+      padding-top: 0;
+      border-top: 0;
+    }
+
+    .num {
+      display: flex;
+      width: 34px;
+      height: 34px;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: var(--blue);
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .box {
+      margin: 12px 0;
+      padding: 14px 16px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #fbfdff;
+    }
+
+    .warn {
+      color: var(--warn);
+      border-color: #f0c36a;
+      background: var(--warn-bg);
+    }
+
+    .ok {
+      color: var(--ok);
+      border-color: #9dd8c1;
+      background: var(--ok-bg);
+    }
+
+    code,
+    .file {
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #eef3f8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.95em;
+    }
+
+    pre {
+      overflow-x: auto;
+      margin: 12px 0;
+      padding: 14px;
+      border-radius: 6px;
+      background: #17212b;
+      color: #eef6ff;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    ul {
+      margin: 8px 0 8px 22px;
+      padding: 0;
+    }
+
+    li {
+      margin: 5px 0;
+    }
+
+    table {
+      width: 100%;
+      margin: 12px 0;
+      border-collapse: collapse;
+      background: #fff;
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--blue-light);
+      color: #17324d;
+      font-weight: 700;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    @media (max-width: 640px) {
+      main {
+        padding: 22px 12px 40px;
+      }
+
+      section {
+        padding: 16px;
+      }
+
+      .step {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Fetch Orders 用户操作说明</h1>
+      <p class="subtitle">用于下载上游订单 Excel 文件，下载完成后可继续做订单对账。</p>
+    </header>
+
+    <section>
+      <h2>先看这三件事</h2>
+      <div class="box warn">
+        <strong>重要提醒：</strong><span class="file">loginConf.ini</span> 里面有账号、密码、apikey、token 等敏感信息。请自己保管，不要发给任何人，不要截图外发，也不要上传到任何公共位置。
+      </div>
+      <ul>
+        <li>第一次使用前，必须先准备 <span class="file">loginConf.ini</span>。</li>
+        <li><code>api_key</code> 已经默认填好；你只需要填写 <code>username</code>、<code>password</code>、<code>institution_id</code>。</li>
+        <li>下载后的 Excel 会放到 <span class="file">workspace/diffOrders</span> 文件夹。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>第一步：复制配置文件</h2>
+      <div class="step">
+        <div class="num">1</div>
+        <div>
+          <h3>找到模板文件</h3>
+          <p>在工具文件夹里找到：</p>
+          <p><span class="file">loginConf.example.ini</span></p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="num">2</div>
+        <div>
+          <h3>复制一份</h3>
+          <p>复制这个文件，得到一个副本。</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="num">3</div>
+        <div>
+          <h3>改名为 loginConf.ini</h3>
+          <p>把复制出来的文件改名为：</p>
+          <p><span class="file">loginConf.ini</span></p>
+          <p class="small">注意：名字必须完全一样，大小写也尽量保持一致。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>第二步：填写登录信息</h2>
+      <p>用文本编辑器打开 <span class="file">loginConf.ini</span>，找到这一段：</p>
+      <pre>[upstream_server_login]
+api_key = 已经默认填好，不要删除
+username =
+password =
+institution_id =</pre>
+      <p>其中 <code>api_key</code> 已经在模板里默认填好，一般不要修改。请把下面三项的等号后面填上真实值。</p>
+      <table>
+        <thead>
+          <tr>
+            <th>字段</th>
+            <th>怎么填</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>api_key</code></td>
+            <td>模板已默认填好。除非维护人员要求，否则不要修改、不要删除。</td>
+          </tr>
+          <tr>
+            <td><code>username</code></td>
+            <td>填写上游后台登录用户名。</td>
+          </tr>
+          <tr>
+            <td><code>password</code></td>
+            <td>填写上游后台登录密码。</td>
+          </tr>
+          <tr>
+            <td><code>institution_id</code></td>
+            <td>填写上游后台登录所需机构 ID。</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="box">
+        <strong>其他字段：</strong><code>ip_address</code>、<code>session_id</code>、<code>transition_id</code> 如果没人特别要求，可以先留空。
+      </div>
+    </section>
+
+    <section>
+      <h2>第三步：运行下载工具</h2>
+      <h3>如果你使用的是打包后的工具</h3>
+      <p>打开 <span class="file">dist/AutoExcelKit</span> 文件夹，确认里面有：</p>
+      <ul>
+        <li><span class="file">fetch-orders</span></li>
+        <li><span class="file">config.ini</span></li>
+        <li><span class="file">loginConf.ini</span></li>
+      </ul>
+      <p>然后运行 <span class="file">fetch-orders</span>。</p>
+
+      <h3>如果你在项目根目录运行</h3>
+      <p>确认项目根目录里有 <span class="file">loginConf.ini</span>，然后运行拉取订单脚本。</p>
+      <p class="small">如果你不懂命令行，使用打包后的 <span class="file">dist/AutoExcelKit/fetch-orders</span> 更简单。</p>
+    </section>
+
+    <section>
+      <h2>第四步：按提示选择</h2>
+      <p>程序登录成功后，会出现这个问题：</p>
+      <pre>是否需要生成最新的 Excel？输入 y 生成，直接回车或输入 n 使用最近已生成文件：</pre>
+
+      <h3>只想下载最近已经生成好的 Excel</h3>
+      <p>直接按回车，或者输入 <code>n</code>。</p>
+      <div class="box ok">这是最简单、最常用的方式。程序会直接查找最近已经生成完成的 Excel，然后下载。</div>
+
+      <h3>需要后台重新生成一份 Excel</h3>
+      <p>输入 <code>y</code>，然后按回车。</p>
+      <p>接着程序会让你输入日期：</p>
+      <pre>请输入拉取订单日期，直接回车默认前一天 YYYY-MM-DD：</pre>
+      <p>可以输入：</p>
+      <ul>
+        <li><code>2026-06-28</code></li>
+        <li><code>0628</code></li>
+        <li><code>06-28</code></li>
+        <li><code>06/28</code></li>
+      </ul>
+      <p>如果直接回车，就使用提示里的默认日期。</p>
+    </section>
+
+    <section>
+      <h2>第五步：查看下载结果</h2>
+      <p>成功后，会看到类似提示：</p>
+      <pre>Excel 下载完成：.../workspace/diffOrders/TranDetailReport_87382398_20260629141406.1587508.xlsx</pre>
+      <p>下载好的 Excel 在这个文件夹：</p>
+      <p><span class="file">workspace/diffOrders</span></p>
+      <p>文件名一般长这样：</p>
+      <p><span class="file">TranDetailReport_87382398_20260629141406.1587508.xlsx</span></p>
+    </section>
+
+    <section>
+      <h2>常见问题</h2>
+      <h3>1. 登录成功了，但后面查询报 401</h3>
+      <p>通常是默认 <code>api_key</code> 被误删、改坏，或者当前运行目录下的 <span class="file">loginConf.ini</span> 不是你真正填写的那份。</p>
+      <p>请检查：</p>
+      <ul>
+        <li><code>api_key</code> 是否还保留模板里的默认值</li>
+        <li><code>username</code> 是否正确</li>
+        <li><code>password</code> 是否正确</li>
+        <li><code>institution_id</code> 是否正确</li>
+        <li>你运行工具的那个文件夹里，是否真的有填好内容的 <span class="file">loginConf.ini</span></li>
+      </ul>
+
+      <h3>2. 我不想生成新的 Excel</h3>
+      <p>在“是否需要生成最新的 Excel？”那里直接按回车，或者输入 <code>n</code>。</p>
+
+      <h3>3. 找不到下载后的文件</h3>
+      <p>看程序最后一行的“Excel 下载完成”路径。默认位置是：</p>
+      <p><span class="file">workspace/diffOrders</span></p>
+
+      <h3>4. 换了账号后还是不正常</h3>
+      <p>打开 <span class="file">loginConf.ini</span>，清空 <code>[upstream_server_session]</code> 下面旧的 token 等内容，然后重新运行。</p>
+    </section>
+  </main>
+</body>
+</html>
