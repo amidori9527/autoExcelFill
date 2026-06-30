@@ -2,7 +2,9 @@
 setlocal
 
 set "SCRIPT_DIR=%~dp0"
-if exist "%SCRIPT_DIR%AutoExcelKit\fetch-orders.exe" (
+if exist "%SCRIPT_DIR%fetch-orders.exe" (
+  set "BIN=%SCRIPT_DIR%fetch-orders.exe"
+) else if exist "%SCRIPT_DIR%AutoExcelKit\fetch-orders.exe" (
   set "BIN=%SCRIPT_DIR%AutoExcelKit\fetch-orders.exe"
 ) else if exist "%SCRIPT_DIR%dist\AutoExcelKit\fetch-orders.exe" (
   set "BIN=%SCRIPT_DIR%dist\AutoExcelKit\fetch-orders.exe"

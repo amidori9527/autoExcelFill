@@ -2,7 +2,9 @@
 setlocal
 
 set "SCRIPT_DIR=%~dp0"
-if exist "%SCRIPT_DIR%AutoExcelKit\autoexcel-fill.exe" (
+if exist "%SCRIPT_DIR%autoexcel-fill.exe" (
+  set "BIN=%SCRIPT_DIR%autoexcel-fill.exe"
+) else if exist "%SCRIPT_DIR%AutoExcelKit\autoexcel-fill.exe" (
   set "BIN=%SCRIPT_DIR%AutoExcelKit\autoexcel-fill.exe"
 ) else if exist "%SCRIPT_DIR%dist\AutoExcelKit\autoexcel-fill.exe" (
   set "BIN=%SCRIPT_DIR%dist\AutoExcelKit\autoexcel-fill.exe"

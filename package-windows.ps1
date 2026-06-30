@@ -21,11 +21,12 @@ if (Test-Path $ReleaseDir) {
 New-Item -ItemType Directory -Path $ReleaseDir | Out-Null
 
 Copy-Item -Path (Join-Path $Root "dist\AutoExcelKit") -Destination (Join-Path $ReleaseDir "AutoExcelKit") -Recurse
-Copy-Item -Path (Join-Path $Root "run-autoexcel-fill.bat") -Destination $ReleaseDir
-Copy-Item -Path (Join-Path $Root "run-diff-orders.bat") -Destination $ReleaseDir
-Copy-Item -Path (Join-Path $Root "run-fetch-orders.bat") -Destination $ReleaseDir
-Copy-Item -Path (Join-Path $Root "fetch-orders-user-guide.html") -Destination $ReleaseDir
-Copy-Item -Path (Join-Path $Root "RELEASE_README_Windows.txt") -Destination (Join-Path $ReleaseDir "README.txt")
+$KitDir = Join-Path $ReleaseDir "AutoExcelKit"
+Copy-Item -Path (Join-Path $Root "run-autoexcel-fill.bat") -Destination $KitDir
+Copy-Item -Path (Join-Path $Root "run-diff-orders.bat") -Destination $KitDir
+Copy-Item -Path (Join-Path $Root "run-fetch-orders.bat") -Destination $KitDir
+Copy-Item -Path (Join-Path $Root "fetch-orders-user-guide.html") -Destination $KitDir
+Copy-Item -Path (Join-Path $Root "RELEASE_README_Windows.txt") -Destination (Join-Path $KitDir "README.txt")
 
 if (Test-Path $ZipPath) {
   Remove-Item $ZipPath -Force
