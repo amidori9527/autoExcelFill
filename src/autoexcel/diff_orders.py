@@ -31,10 +31,14 @@ TEMPLATE_FILE_NAME = "order_diff.html"
 CONFIG_FILE_NAME = "config.ini"
 HEADER_KEYWORDS = {
     "TRANSACTION REFERENCE NUMBER",
+    "ReferenceId",
     "请求上游订单号",
+    "请求上游ID",
 }
 UPSTREAM_FILE_PREFIX = "TranDetailReport"
+FINERBIT_UPSTREAM_FILE_PREFIX = "Transaction Details"
 BACKEND_FILE_PREFIX = "收款订单"
+DUPLICATE_PAYMENT_FILE_KEYWORD = "重复支付订单"
 
 
 @dataclass(frozen=True)
@@ -43,6 +47,7 @@ class OrderEntry:
     row_number: int
     amount: Decimal = Decimal("0")
     fee: Decimal = Decimal("0")
+    payment_method: str = ""
 
 
 @dataclass(frozen=True)
@@ -66,12 +71,18 @@ class DiffResult:
     a_only_amount: Decimal
     b_only_amount: Decimal
     mismatch_amount: Decimal
+    duplicate_payment_entries: tuple[OrderEntry, ...] = ()
+    repeated_difference_entries: tuple[OrderEntry, ...] = ()
+    remaining_difference_entries: tuple[OrderEntry, ...] = ()
+    channel_cost: Decimal = Decimal("0")
+    special_mode: str = ""
 
 
 @dataclass(frozen=True)
 class DiffJob:
     upstream_path: Path
     backend_path: Path
+    duplicate_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -212,11 +223,17 @@ def resolve_target_date(value: str | None) -> date:
 
 def match_upstream_workbook(path: Path, date_text: str) -> bool:
     pattern = rf"{re.escape(UPSTREAM_FILE_PREFIX)}[_\-\s]+[^_\-\s]+[_\-\s]+{date_text}"
-    return re.search(pattern, path.stem) is not None
+    if re.search(pattern, path.stem) is not None:
+        return True
+    return path.stem.startswith(FINERBIT_UPSTREAM_FILE_PREFIX) and date_text in path.stem
 
 
 def match_backend_workbook(path: Path, date_text: str) -> bool:
     return BACKEND_FILE_PREFIX in path.stem and date_text in path.stem
+
+
+def match_duplicate_payment_workbook(path: Path, date_text: str) -> bool:
+    return DUPLICATE_PAYMENT_FILE_KEYWORD in path.stem and date_text in path.stem
 
 
 def latest_matching_workbook(
@@ -255,25 +272,63 @@ def matching_workbooks(
     return matches
 
 
-def pair_diff_workbooks(upstream_paths: list[Path], backend_paths: list[Path]) -> list[DiffJob]:
+def duplicate_path_for_pair(upstream_path: Path, backend_path: Path, duplicate_paths: list[Path]) -> Path | None:
+    same_directory = [
+        path for path in duplicate_paths if path.parent in {upstream_path.parent, backend_path.parent}
+    ]
+    if same_directory:
+        return same_directory[0]
+    if len(duplicate_paths) == 1:
+        return duplicate_paths[0]
+    return None
+
+
+def pair_diff_workbooks(
+    upstream_paths: list[Path],
+    backend_paths: list[Path],
+    duplicate_paths: list[Path] | None = None,
+) -> list[DiffJob]:
+    duplicate_paths = duplicate_paths or []
     upstream_by_key = {key: path for path in upstream_paths if (key := platform_key_from_path(path))}
     backend_by_key = {key: path for path in backend_paths if (key := platform_key_from_path(path))}
     shared_keys = sorted(upstream_by_key.keys() & backend_by_key.keys())
     if shared_keys and len(shared_keys) == len(upstream_paths) == len(backend_paths):
         return [
-            DiffJob(upstream_path=upstream_by_key[key], backend_path=backend_by_key[key])
+            DiffJob(
+                upstream_path=upstream_by_key[key],
+                backend_path=backend_by_key[key],
+                duplicate_path=duplicate_path_for_pair(upstream_by_key[key], backend_by_key[key], duplicate_paths),
+            )
             for key in shared_keys
         ]
 
     if len(upstream_paths) == len(backend_paths):
         return [
-            DiffJob(upstream_path=upstream_path, backend_path=backend_path)
+            DiffJob(
+                upstream_path=upstream_path,
+                backend_path=backend_path,
+                duplicate_path=duplicate_path_for_pair(upstream_path, backend_path, duplicate_paths),
+            )
             for upstream_path, backend_path in zip(upstream_paths, backend_paths)
         ]
     if len(backend_paths) == 1:
-        return [DiffJob(upstream_path=upstream_path, backend_path=backend_paths[0]) for upstream_path in upstream_paths]
+        return [
+            DiffJob(
+                upstream_path=upstream_path,
+                backend_path=backend_paths[0],
+                duplicate_path=duplicate_path_for_pair(upstream_path, backend_paths[0], duplicate_paths),
+            )
+            for upstream_path in upstream_paths
+        ]
     if len(upstream_paths) == 1:
-        return [DiffJob(upstream_path=upstream_paths[0], backend_path=backend_path) for backend_path in backend_paths]
+        return [
+            DiffJob(
+                upstream_path=upstream_paths[0],
+                backend_path=backend_path,
+                duplicate_path=duplicate_path_for_pair(upstream_paths[0], backend_path, duplicate_paths),
+            )
+            for backend_path in backend_paths
+        ]
 
     raise ValueError(
         f"自动匹配到 {len(upstream_paths)} 个上游文件、{len(backend_paths)} 个后台文件，无法确定配对关系。"
@@ -286,7 +341,11 @@ def find_diff_jobs_by_date(target_date: date) -> tuple[Path, list[DiffJob]]:
     date_text = target_date.strftime("%Y%m%d")
     upstream_paths = matching_workbooks(files, match_upstream_workbook, "上游", date_text)
     backend_paths = matching_workbooks(files, match_backend_workbook, "后台", date_text)
-    return directory, pair_diff_workbooks(upstream_paths, backend_paths)
+    duplicate_paths = sorted(
+        (path for path in files if match_duplicate_payment_workbook(path, date_text)),
+        key=lambda path: path.name,
+    )
+    return directory, pair_diff_workbooks(upstream_paths, backend_paths, duplicate_paths)
 
 
 def get_template_path() -> Path:
@@ -364,6 +423,8 @@ def choose_diff_jobs_interactive() -> list[DiffJob]:
     for index, job in enumerate(jobs, start=1):
         print(f"  {index}. 上游：{job.upstream_path.name} ({format_file_size(job.upstream_path)})")
         print(f"     后台：{job.backend_path.name} ({format_file_size(job.backend_path)})")
+        if job.duplicate_path:
+            print(f"     重复：{job.duplicate_path.name} ({format_file_size(job.duplicate_path)})")
     print()
     return jobs
 
@@ -373,6 +434,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--version", action="version", version=version_text("diff-orders"))
     parser.add_argument("--a", type=Path, default=None, help="A (上游) workbook path.")
     parser.add_argument("--b", type=Path, default=None, help="B (后台) workbook path.")
+    parser.add_argument("--duplicate", type=Path, default=None, help="代收重复支付订单 workbook path.")
     parser.add_argument("--a-col", default="L", help="A order ID column. Default: L")
     parser.add_argument("--b-col", default="D", help="B order ID column. Default: D")
     parser.add_argument(
@@ -456,25 +518,77 @@ def read_order_entries(
     id_col: str,
     amount_col: str | None = None,
     fee_col: str | None = None,
+    payment_method_col: str | None = None,
 ) -> list[OrderEntry]:
     workbook = load_workbook(path, read_only=True, data_only=True)
-    worksheet = workbook[workbook.sheetnames[0]]
     id_column_index = column_index_from_string(id_col)
     amount_column_index = column_index_from_string(amount_col) if amount_col else None
     fee_column_index = column_index_from_string(fee_col) if fee_col else None
-    max_column_index = max(index for index in (id_column_index, amount_column_index, fee_column_index) if index)
+    payment_method_column_index = column_index_from_string(payment_method_col) if payment_method_col else None
+    max_column_index = max(
+        index
+        for index in (id_column_index, amount_column_index, fee_column_index, payment_method_column_index)
+        if index
+    )
     entries: list[OrderEntry] = []
-    for row_number, row in enumerate(
-        worksheet.iter_rows(min_col=1, max_col=max_column_index, values_only=True),
-        start=1,
-    ):
-        order_id = normalize_order_id(row[id_column_index - 1])
-        if order_id is None:
-            continue
-        amount = decimal_value(row[amount_column_index - 1]) if amount_column_index else Decimal("0")
-        fee = decimal_value(row[fee_column_index - 1]) if fee_column_index else Decimal("0")
-        entries.append(OrderEntry(order_id=order_id, row_number=row_number, amount=amount, fee=fee))
+    global_row_number = 0
+    for worksheet in workbook.worksheets:
+        for row in worksheet.iter_rows(min_col=1, max_col=max_column_index, values_only=True):
+            global_row_number += 1
+            order_id = normalize_order_id(row[id_column_index - 1])
+            if order_id is None:
+                continue
+            amount = decimal_value(row[amount_column_index - 1]) if amount_column_index else Decimal("0")
+            fee = decimal_value(row[fee_column_index - 1]) if fee_column_index else Decimal("0")
+            payment_method = ""
+            if payment_method_column_index:
+                payment_method = str(row[payment_method_column_index - 1] or "").strip().lower()
+            entries.append(
+                OrderEntry(
+                    order_id=order_id,
+                    row_number=global_row_number,
+                    amount=amount,
+                    fee=fee,
+                    payment_method=payment_method,
+                )
+            )
     return entries
+
+
+def is_finerbit_job(job: DiffJob) -> bool:
+    return job.duplicate_path is not None or job.upstream_path.stem.startswith(FINERBIT_UPSTREAM_FILE_PREFIX)
+
+
+def read_job_diff_result(job: DiffJob, args: argparse.Namespace) -> JobDiffResult:
+    if is_finerbit_job(job):
+        a_entries = read_order_entries(job.upstream_path, id_col="B", amount_col="G", payment_method_col="D")
+        b_entries = read_order_entries(job.backend_path, id_col="D", amount_col="G", fee_col="I", payment_method_col="Z")
+        duplicate_entries = (
+            read_order_entries(job.duplicate_path, id_col="C", amount_col="K") if job.duplicate_path else []
+        )
+        result = diff_orders_with_duplicate_payments(a_entries, b_entries, duplicate_entries)
+        return JobDiffResult(job=job, result=result)
+
+    a_entries = read_order_entries(job.upstream_path, id_col=args.a_col, amount_col="H")
+    b_entries = read_order_entries(job.backend_path, id_col=args.b_col, amount_col="G", fee_col="I")
+    return JobDiffResult(job=job, result=diff_orders(a_entries, b_entries))
+
+
+def payment_rate(payment_method: str) -> Decimal:
+    normalized = payment_method.strip().lower()
+    if "easypaisa" in normalized or "easy paisa" in normalized:
+        return Decimal("0.04")
+    if "jazzcash" in normalized or "jazz cash" in normalized:
+        return Decimal("0.023")
+    return Decimal("0")
+
+
+def calculated_fee_by_payment_method(entries: list[OrderEntry], amount_source: str) -> Decimal:
+    total = Decimal("0")
+    for entry in entries:
+        base_amount = entry.fee if amount_source == "fee" else entry.amount
+        total += base_amount * payment_rate(entry.payment_method)
+    return total
 
 
 def grouped_entries(entries: list[OrderEntry]) -> dict[str, tuple[int, Decimal]]:
@@ -524,6 +638,52 @@ def diff_orders(a_entries: list[OrderEntry], b_entries: list[OrderEntry]) -> Dif
     )
 
 
+def difference_unique_entries(result: DiffResult) -> list[OrderEntry]:
+    return unique_entries(result.a_only + result.b_only)
+
+
+def upstream_difference_entries(result: DiffResult) -> list[OrderEntry]:
+    return unique_entries(result.a_only)
+
+
+def diff_orders_with_duplicate_payments(
+    a_entries: list[OrderEntry],
+    b_entries: list[OrderEntry],
+    duplicate_entries: list[OrderEntry],
+) -> DiffResult:
+    base_result = diff_orders(a_entries, b_entries)
+    difference_entries = upstream_difference_entries(base_result)
+    duplicate_ids = {entry.order_id for entry in duplicate_entries}
+    repeated_entries = tuple(entry for entry in difference_entries if entry.order_id in duplicate_ids)
+    remaining_entries = tuple(entry for entry in difference_entries if entry.order_id not in duplicate_ids)
+    return DiffResult(
+        a_entries=base_result.a_entries,
+        b_entries=base_result.b_entries,
+        a_only=base_result.a_only,
+        b_only=base_result.b_only,
+        mismatched=base_result.mismatched,
+        a_count=base_result.a_count,
+        b_count=base_result.b_count,
+        a_row_count=base_result.a_row_count,
+        b_row_count=base_result.b_row_count,
+        common_count=base_result.common_count,
+        a_duplicate_count=base_result.a_duplicate_count,
+        b_duplicate_count=base_result.b_duplicate_count,
+        a_amount=base_result.a_amount,
+        b_amount=base_result.b_amount,
+        a_fee=calculated_fee_by_payment_method(a_entries, "amount"),
+        b_fee=base_result.b_fee,
+        a_only_amount=base_result.a_only_amount,
+        b_only_amount=base_result.b_only_amount,
+        mismatch_amount=base_result.mismatch_amount,
+        duplicate_payment_entries=tuple(unique_entries(duplicate_entries)),
+        repeated_difference_entries=repeated_entries,
+        remaining_difference_entries=remaining_entries,
+        channel_cost=calculated_fee_by_payment_method(b_entries, "amount"),
+        special_mode="finerbit",
+    )
+
+
 def unique_entries(entries: list[OrderEntry]) -> list[OrderEntry]:
     seen: set[str] = set()
     unique: list[OrderEntry] = []
@@ -569,6 +729,17 @@ def render_upstream_order_table(entries: list[OrderEntry]) -> str:
 
 def summary_metrics(job_result: JobDiffResult) -> list[SummaryMetric]:
     result = job_result.result
+    if result.special_mode == "finerbit":
+        return [
+            SummaryMetric("我方TP订单", result.b_row_count, result.b_amount, result.b_fee, result.b_count, "D列 请求上游订单号", unique_order_ids(result.b_entries)),
+            SummaryMetric("上游订单", result.a_row_count, result.a_amount, result.a_fee, result.a_count, "Transaction Details B列 ReferenceId", unique_order_ids(result.a_entries)),
+            SummaryMetric("双方共有", result.common_count, Decimal("0"), None, result.common_count, "两边都存在的订单号", []),
+            SummaryMetric("上游独有", len(unique_entries(result.a_only)), result.a_only_amount, None, len(unique_entries(result.a_only)), "上游有，我方TP没有", unique_order_ids(result.a_only)),
+            SummaryMetric("我方独有", len(unique_entries(result.b_only)), result.b_only_amount, None, len(unique_entries(result.b_only)), "我方TP有，上游没有", unique_order_ids(result.b_only)),
+            SummaryMetric("代收重复订单", len(result.duplicate_payment_entries), sum((entry.amount for entry in result.duplicate_payment_entries), Decimal("0")), None, len(result.duplicate_payment_entries), "代收重复支付订单 C列 请求上游ID", unique_order_ids(list(result.duplicate_payment_entries))),
+            SummaryMetric("重复订单", len(result.repeated_difference_entries), sum((entry.amount for entry in result.repeated_difference_entries), Decimal("0")), None, len(result.repeated_difference_entries), "上游独有订单中命中代收重复订单", unique_order_ids(list(result.repeated_difference_entries))),
+            SummaryMetric("仍存在的差异", len(result.remaining_difference_entries), sum((entry.amount for entry in result.remaining_difference_entries), Decimal("0")), None, len(result.remaining_difference_entries), "完成时间/投诉退款/重复支付后仍需处理", unique_order_ids(list(result.remaining_difference_entries))),
+        ]
     return [
         SummaryMetric("上游订单", result.a_row_count, result.a_amount, result.a_fee, result.a_count, "TranDetailReport", unique_order_ids(result.a_entries)),
         SummaryMetric("我方TP订单", result.b_row_count, result.b_amount, result.b_fee, result.b_count, "收款订单；手续费取 I 列", unique_order_ids(result.b_entries)),
@@ -645,20 +816,64 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
     metrics = summary_metrics(job_result)
     metric_rows, copy_payloads = render_metric_rows(metrics, f"g{index}")
     title_prefix = f"第 {index} 组：" if total > 1 else ""
-    profit = result.b_fee - result.a_fee
+    profit = result.b_fee - result.a_fee if result.special_mode == "finerbit" else result.b_fee - result.a_fee - result.channel_cost
     total_summary = (
         f"上游合计 {number(result.a_row_count)} 笔 / {money(result.a_amount)} PKR；"
         f"TP合计 {number(result.b_row_count)} 笔 / {money(result.b_amount)} PKR"
     )
-    conclusion = (
-        f"{platform}：上游独有 {len(unique_entries(result.a_only))} 单；"
-        f"TP独有 {len(unique_entries(result.b_only))} 单；"
-        f"金额/笔数不一致 {len(result.mismatched)} 单。"
+    if result.special_mode == "finerbit":
+        difference_count = len(upstream_difference_entries(result))
+        conclusion = (
+            f"差异订单 {number(difference_count)} 个；"
+            f"其中 {number(len(result.repeated_difference_entries))} 个为重复订单，"
+            f"{number(len(result.remaining_difference_entries))} 个仍存在差异。"
+        )
+        formula_text = (
+            "我方TP订单 D列 请求上游订单号 vs 上游订单 Transaction Details B列 ReferenceId；"
+            "差异订单号 vs 代收重复支付订单 C列 请求上游ID"
+        )
+    else:
+        conclusion = (
+            f"{platform}：上游独有 {len(unique_entries(result.a_only))} 单；"
+            f"TP独有 {len(unique_entries(result.b_only))} 单；"
+            f"金额/笔数不一致 {len(result.mismatched)} 单。"
+        )
+        formula_text = total_summary
+    extra_profit_label = "-渠道成本" if result.special_mode == "finerbit" else ""
+    duplicate_file_note = (
+        f"<br>代收重复：{escape(job_result.job.duplicate_path.name)}" if job_result.job.duplicate_path else ""
+    )
+    profit_tp_amount = result.a_amount if result.special_mode == "finerbit" else result.b_amount
+    upstream_platform_label = "finerBit" if result.special_mode == "finerbit" else platform
+    tp_platform_label = "tarspay" if result.special_mode == "finerbit" else "TP"
+    tp_success_amount_label = (
+        f"{tp_platform_label}平台（finerBit交易成功金额）"
+        if result.special_mode == "finerbit"
+        else f"TP平台（{platform} 交易成功金额）"
+    )
+    tp_success_count_label = (
+        f"{tp_platform_label}平台（finerBit成功笔数）"
+        if result.special_mode == "finerbit"
+        else f"TP平台（{platform} 成功笔数）"
+    )
+    channel_cost_header = (
+        f'<th class="tp-head">{escape(tp_platform_label)}平台（finerBit渠道成本）</th>'
+        if result.special_mode == "finerbit"
+        else ""
+    )
+    channel_cost_cell = (
+        f'<td class="num">{money(result.channel_cost)}</td>' if result.special_mode == "finerbit" else ""
+    )
+    profit_header = (
+        f"{escape(tp_platform_label)}平台利润（finerBit）"
+        if result.special_mode == "finerbit"
+        else f"TP平台利润（TP手续费-上游手续费{extra_profit_label}）"
     )
 
     html = f"""
     <section class="result-section" id="result-section-{index}">
       <h1>{title_prefix}订单差异对账结果（上游 vs TP） - {escape(platform)}</h1>
+      <p class="formula">{escape(formula_text)}</p>
       <p class="formula">{escape(total_summary)}</p>
       <table class="summary-table">
         <thead>
@@ -673,28 +888,30 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
       <table class="profit-table">
         <thead>
           <tr>
-            <th class="do-head">{escape(platform)} 平台DO（交易金额）</th>
-            <th class="tp-head">TP平台（{escape(platform)} 交易成功金额）</th>
-            <th class="do-head">{escape(platform)} 平台DO（成功笔数）</th>
-            <th class="tp-head">TP平台（{escape(platform)} 成功笔数）</th>
-            <th class="do-head">{escape(platform)} 平台DO（手续费）</th>
-            <th class="tp-head">TP平台（手续费）</th>
-            <th class="profit-head">TP平台利润（TP手续费-上游手续费）</th>
+            <th class="do-head">{escape(upstream_platform_label)}平台（交易金额）</th>
+            <th class="tp-head">{escape(tp_success_amount_label)}</th>
+            <th class="do-head">{escape(upstream_platform_label)}平台（成功笔数）</th>
+            <th class="tp-head">{escape(tp_success_count_label)}</th>
+            <th class="do-head">{escape(upstream_platform_label)}平台（手续费）</th>
+            {channel_cost_header}
+            <th class="tp-head">{escape(tp_platform_label)}平台（手续费）</th>
+            <th class="profit-head">{profit_header}</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td class="num">{money(result.a_amount)}</td>
-            <td class="num">{money(result.b_amount)}</td>
+            <td class="num">{money(profit_tp_amount)}</td>
             <td class="num">{number(result.a_row_count)}</td>
             <td class="num">{number(result.b_row_count)}</td>
             <td class="num">{money(result.a_fee)}</td>
+            {channel_cost_cell}
             <td class="num">{money(result.b_fee)}</td>
             <td class="num">{money(profit)}</td>
           </tr>
         </tbody>
       </table>
-      <div class="file-note">上游：{escape(job_result.job.upstream_path.name)}<br>TP：{escape(job_result.job.backend_path.name)}</div>
+      <div class="file-note">上游：{escape(job_result.job.upstream_path.name)}<br>TP：{escape(job_result.job.backend_path.name)}{duplicate_file_note}</div>
     </section>
     """
     return html, copy_payloads
@@ -993,7 +1210,7 @@ def maybe_open_html(path: Path, auto_open_html: bool, label: str) -> None:
 
 def resolve_diff_jobs(args: argparse.Namespace) -> list[DiffJob]:
     if args.a is not None and args.b is not None:
-        return [DiffJob(upstream_path=args.a, backend_path=args.b)]
+        return [DiffJob(upstream_path=args.a, backend_path=args.b, duplicate_path=args.duplicate)]
 
     target_date = resolve_target_date(args.target_date)
     directory, jobs = find_diff_jobs_by_date(target_date)
@@ -1006,6 +1223,8 @@ def resolve_diff_jobs(args: argparse.Namespace) -> list[DiffJob]:
     for index, job in enumerate(jobs, start=1):
         print(f"  {index}. 上游：{job.upstream_path.name} ({format_file_size(job.upstream_path)})")
         print(f"     后台：{job.backend_path.name} ({format_file_size(job.backend_path)})")
+        if job.duplicate_path:
+            print(f"     重复：{job.duplicate_path.name} ({format_file_size(job.duplicate_path)})")
     print()
     return jobs
 
@@ -1047,9 +1266,7 @@ def main() -> None:
     for index, job in enumerate(jobs, start=1):
         if len(jobs) > 1:
             print(f"  正在处理第 {index}/{len(jobs)} 组：{job.upstream_path.name} / {job.backend_path.name}")
-        a_entries = read_order_entries(job.upstream_path, id_col=args.a_col, amount_col="H")
-        b_entries = read_order_entries(job.backend_path, id_col=args.b_col, amount_col="G", fee_col="I")
-        job_results.append(JobDiffResult(job=job, result=diff_orders(a_entries, b_entries)))
+        job_results.append(read_job_diff_result(job, args))
 
     if len(job_results) > 1:
         html_path = write_batch_html_result(result_dir, job_results)

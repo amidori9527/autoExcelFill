@@ -67,6 +67,12 @@ When more than one upstream/backend group matches the date, the tool compares
 all groups in batch, writes one summary HTML result, and opens it automatically.
 Batch mode does not copy order IDs to the clipboard automatically.
 
+When a group contains `代收重复支付订单_<date>.xlsx`, the tool first compares
+upstream vs TP, then compares the resulting difference order IDs with duplicate
+payment column C to split duplicate orders from remaining differences.
+For this finerBit mode, the upstream fee uses upstream column G amount and
+upstream column D ChannelName: EasyPaisa 4%, JazzCash 2.3%.
+
 Set `[diff_orders] auto_open_html = false` in `config.ini` to stop automatically
 opening the generated HTML. Result HTML filenames include the comparison folder
 name, for example `order_diff_jz663_YYYYMMDD_HHMMSS.html`.
