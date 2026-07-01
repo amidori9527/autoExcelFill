@@ -48,6 +48,8 @@ class OrderEntry:
     amount: Decimal = Decimal("0")
     fee: Decimal = Decimal("0")
     payment_method: str = ""
+    sheet_name: str = ""
+    extra: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -519,22 +521,34 @@ def read_order_entries(
     amount_col: str | None = None,
     fee_col: str | None = None,
     payment_method_col: str | None = None,
+    extra_cols: dict[str, str] | None = None,
 ) -> list[OrderEntry]:
     workbook = load_workbook(path, read_only=True, data_only=True)
     id_column_index = column_index_from_string(id_col)
     amount_column_index = column_index_from_string(amount_col) if amount_col else None
     fee_column_index = column_index_from_string(fee_col) if fee_col else None
     payment_method_column_index = column_index_from_string(payment_method_col) if payment_method_col else None
+    extra_col_indexes = {
+        key: column_index_from_string(column)
+        for key, column in (extra_cols or {}).items()
+    }
     max_column_index = max(
         index
-        for index in (id_column_index, amount_column_index, fee_column_index, payment_method_column_index)
+        for index in (
+            id_column_index,
+            amount_column_index,
+            fee_column_index,
+            payment_method_column_index,
+            *extra_col_indexes.values(),
+        )
         if index
     )
     entries: list[OrderEntry] = []
-    global_row_number = 0
     for worksheet in workbook.worksheets:
-        for row in worksheet.iter_rows(min_col=1, max_col=max_column_index, values_only=True):
-            global_row_number += 1
+        for row_number, row in enumerate(
+            worksheet.iter_rows(min_col=1, max_col=max_column_index, values_only=True),
+            start=1,
+        ):
             order_id = normalize_order_id(row[id_column_index - 1])
             if order_id is None:
                 continue
@@ -543,13 +557,19 @@ def read_order_entries(
             payment_method = ""
             if payment_method_column_index:
                 payment_method = str(row[payment_method_column_index - 1] or "").strip().lower()
+            extra = {
+                key: row[column_index - 1]
+                for key, column_index in extra_col_indexes.items()
+            }
             entries.append(
                 OrderEntry(
                     order_id=order_id,
-                    row_number=global_row_number,
+                    row_number=row_number,
                     amount=amount,
                     fee=fee,
                     payment_method=payment_method,
+                    sheet_name=worksheet.title,
+                    extra=extra,
                 )
             )
     return entries
@@ -561,10 +581,51 @@ def is_finerbit_job(job: DiffJob) -> bool:
 
 def read_job_diff_result(job: DiffJob, args: argparse.Namespace) -> JobDiffResult:
     if is_finerbit_job(job):
-        a_entries = read_order_entries(job.upstream_path, id_col="B", amount_col="G", payment_method_col="D")
-        b_entries = read_order_entries(job.backend_path, id_col="D", amount_col="G", fee_col="I", payment_method_col="Z")
+        a_entries = read_order_entries(
+            job.upstream_path,
+            id_col="B",
+            amount_col="G",
+            payment_method_col="D",
+            extra_cols={
+                "transaction_id": "A",
+                "status": "K",
+                "created_date": "L",
+                "channel_reference_id": "N",
+            },
+        )
+        b_entries = read_order_entries(
+            job.backend_path,
+            id_col="D",
+            amount_col="G",
+            fee_col="I",
+            payment_method_col="Z",
+            extra_cols={
+                "platform_order_id": "A",
+                "merchant_order_id": "B",
+                "channel_order_id": "C",
+                "completed_at": "W",
+            },
+        )
         duplicate_entries = (
-            read_order_entries(job.duplicate_path, id_col="C", amount_col="K") if job.duplicate_path else []
+            read_order_entries(
+                job.duplicate_path,
+                id_col="C",
+                amount_col="K",
+                fee_col="L",
+                payment_method_col="I",
+                extra_cols={
+                    "platform_payment_order_id": "A",
+                    "merchant_order_id": "B",
+                    "channel_order_id": "D",
+                    "merchant_name": "F",
+                    "channel_cost": "N",
+                    "status": "O",
+                    "tid": "Q",
+                    "completed_at": "R",
+                },
+            )
+            if job.duplicate_path
+            else []
         )
         result = diff_orders_with_duplicate_payments(a_entries, b_entries, duplicate_entries)
         return JobDiffResult(job=job, result=result)
@@ -588,6 +649,14 @@ def calculated_fee_by_payment_method(entries: list[OrderEntry], amount_source: s
     for entry in entries:
         base_amount = entry.fee if amount_source == "fee" else entry.amount
         total += base_amount * payment_rate(entry.payment_method)
+    return total
+
+
+def calculated_row_rounded_fee_by_payment_method(entries: list[OrderEntry], amount_source: str) -> Decimal:
+    total = Decimal("0")
+    for entry in entries:
+        base_amount = entry.fee if amount_source == "fee" else entry.amount
+        total += (base_amount * payment_rate(entry.payment_method)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return total
 
 
@@ -679,7 +748,7 @@ def diff_orders_with_duplicate_payments(
         duplicate_payment_entries=tuple(unique_entries(duplicate_entries)),
         repeated_difference_entries=repeated_entries,
         remaining_difference_entries=remaining_entries,
-        channel_cost=calculated_fee_by_payment_method(b_entries, "amount"),
+        channel_cost=calculated_row_rounded_fee_by_payment_method(a_entries, "amount"),
         special_mode="finerbit",
     )
 
@@ -770,6 +839,231 @@ def render_metric_rows(metrics: list[SummaryMetric], section_key: str) -> tuple[
             "</tr>"
         )
     return "".join(rows), copy_payloads
+
+
+def text_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def extra_value(entry: OrderEntry, key: str) -> Any:
+    if not entry.extra:
+        return None
+    return entry.extra.get(key)
+
+
+def row_fee(entry: OrderEntry) -> Decimal:
+    return (entry.amount * payment_rate(entry.payment_method)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def money_cell(value: Decimal | Any) -> str:
+    if isinstance(value, Decimal):
+        return money(value)
+    return escape(text_value(value))
+
+
+def render_detail_table(headers: list[str], rows: list[list[tuple[Any, bool]]]) -> str:
+    if not rows:
+        return '<div class="empty-detail">无明细</div>'
+    header_html = "".join(f"<th>{escape(header)}</th>" for header in headers)
+    body_rows: list[str] = []
+    for row in rows:
+        cells = []
+        for value, is_number in row:
+            class_name = ' class="num"' if is_number else ""
+            cells.append(f"<td{class_name}>{money_cell(value)}</td>")
+        body_rows.append("<tr>" + "".join(cells) + "</tr>")
+    return (
+        '<div class="detail-table-wrap">'
+        '<table class="detail-table">'
+        f"<thead><tr>{header_html}</tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody>"
+        "</table>"
+        "</div>"
+    )
+
+
+def render_detail_panel(
+    section_key: str,
+    panel_key: str,
+    title: str,
+    headers: list[str],
+    rows: list[list[tuple[Any, bool]]],
+    order_ids: list[str],
+) -> tuple[str, dict[str, list[str]]]:
+    copy_key = f"{section_key}-{panel_key}"
+    disabled = " disabled" if not order_ids else ""
+    html = f"""
+      <div class="detail-toolbar">
+        <strong>{escape(title)}</strong>
+        <button class="copy-ids detail-copy" type="button" data-copy-key="{escape(copy_key, quote=True)}" data-copy-label="{escape(title, quote=True)}"{disabled}>复制本页订单ID</button>
+      </div>
+      {render_detail_table(headers, rows)}
+    """
+    return html, {copy_key: order_ids}
+
+
+def tp_detail_rows(entries: list[OrderEntry]) -> list[list[tuple[Any, bool]]]:
+    rows: list[list[tuple[Any, bool]]] = []
+    for entry in sorted(unique_entries(entries), key=lambda item: item.order_id):
+        rows.append(
+            [
+                ("我方独有", False),
+                (entry.sheet_name, False),
+                (entry.row_number, True),
+                (entry.order_id, False),
+                (entry.amount, True),
+                (entry.fee, True),
+                (row_fee(entry), True),
+                (entry.payment_method, False),
+                (extra_value(entry, "platform_order_id"), False),
+                (extra_value(entry, "merchant_order_id"), False),
+                (extra_value(entry, "channel_order_id"), False),
+                (extra_value(entry, "completed_at"), False),
+            ]
+        )
+    return rows
+
+
+def upstream_detail_rows(entries: list[OrderEntry], source: str, note: str = "") -> list[list[tuple[Any, bool]]]:
+    rows: list[list[tuple[Any, bool]]] = []
+    for entry in sorted(unique_entries(entries), key=lambda item: item.order_id):
+        row = [
+            (source, False),
+            (entry.row_number, True),
+            (entry.order_id, False),
+            (entry.amount, True),
+            (row_fee(entry), True),
+            (entry.payment_method, False),
+            (extra_value(entry, "transaction_id"), False),
+            (extra_value(entry, "status"), False),
+        ]
+        if note:
+            row.append((note, False))
+        else:
+            row.extend(
+                [
+                    (extra_value(entry, "created_date"), False),
+                    (extra_value(entry, "channel_reference_id"), False),
+                ]
+            )
+        rows.append(row)
+    return rows
+
+
+def final_difference_rows(entries: tuple[OrderEntry, ...]) -> list[list[tuple[Any, bool]]]:
+    rows: list[list[tuple[Any, bool]]] = []
+    for entry in sorted(unique_entries(list(entries)), key=lambda item: item.order_id):
+        rows.append(
+            [
+                ("上游独有", False),
+                (entry.row_number, True),
+                (entry.order_id, False),
+                (extra_value(entry, "channel_reference_id"), False),
+                (entry.amount, True),
+                (row_fee(entry), True),
+                (entry.payment_method, False),
+                (extra_value(entry, "status"), False),
+                ("除重复支付之外的差异", False),
+            ]
+        )
+    return rows
+
+
+def duplicate_detail_rows(result: DiffResult) -> list[list[tuple[Any, bool]]]:
+    repeated_ids = {entry.order_id for entry in result.repeated_difference_entries}
+    rows: list[list[tuple[Any, bool]]] = []
+    for entry in sorted(
+        (entry for entry in unique_entries(list(result.duplicate_payment_entries)) if entry.order_id in repeated_ids),
+        key=lambda item: item.order_id,
+    ):
+        rows.append(
+            [
+                (entry.row_number, True),
+                (entry.order_id, False),
+                (entry.amount, True),
+                (entry.fee, True),
+                (extra_value(entry, "channel_cost"), True),
+                (entry.payment_method, False),
+                (extra_value(entry, "platform_payment_order_id"), False),
+                (extra_value(entry, "merchant_order_id"), False),
+                (extra_value(entry, "channel_order_id"), False),
+                (extra_value(entry, "merchant_name"), False),
+                (extra_value(entry, "status"), False),
+                (extra_value(entry, "completed_at"), False),
+            ]
+        )
+    return rows
+
+
+def render_finerbit_tabs(summary_html: str, result: DiffResult, section_key: str) -> tuple[str, dict[str, list[str]]]:
+    copy_payloads: dict[str, list[str]] = {}
+    panels: list[tuple[str, str, str]] = [("summary", "汇总", summary_html)]
+
+    detail_specs = [
+        (
+            "tp-only",
+            "我方独有",
+            ["来源", "工作表", "源表行号", "订单号", "金额(PKR)", "手续费(PKR)", "渠道成本(PKR)", "收款方式名称", "平台订单号", "商户订单号", "渠道订单号", "完成时间"],
+            tp_detail_rows(result.b_only),
+            unique_order_ids(result.b_only),
+        ),
+        (
+            "upstream-only",
+            "上游独有",
+            ["来源", "源表行号", "订单号", "金额(PKR)", "手续费(PKR)", "支付方式", "TransactionId", "状态", "Created Date", "ChannelReferenceId"],
+            upstream_detail_rows(result.a_only, "上游独有"),
+            unique_order_ids(result.a_only),
+        ),
+        (
+            "repeated",
+            "重复订单",
+            ["来源", "源表行号", "订单号", "金额(PKR)", "手续费/成本(PKR)", "支付方式", "TransactionId", "状态", "说明"],
+            upstream_detail_rows(list(result.repeated_difference_entries), "上游独有", "差异订单命中代收重复订单"),
+            unique_order_ids(list(result.repeated_difference_entries)),
+        ),
+        (
+            "repeated-detail",
+            "重复订单明细",
+            ["源表行号", "请求上游ID", "订单金额(PKR)", "商户手续费", "渠道成本", "支付方式", "平台支付订单号", "商户订单号", "渠道订单号", "商户名称", "状态", "完成时间"],
+            duplicate_detail_rows(result),
+            unique_order_ids(list(result.repeated_difference_entries)),
+        ),
+        (
+            "remaining",
+            "最终仍存在差异",
+            ["来源", "源表行号", "订单号", "tid", "金额(PKR)", "手续费/成本(PKR)", "支付方式", "状态", "后续处理"],
+            final_difference_rows(result.remaining_difference_entries),
+            unique_order_ids(list(result.remaining_difference_entries)),
+        ),
+    ]
+
+    for key, title, headers, rows, order_ids in detail_specs:
+        panel_html, panel_payloads = render_detail_panel(section_key, key, title, headers, rows, order_ids)
+        panels.append((key, title, panel_html))
+        copy_payloads.update(panel_payloads)
+
+    tab_buttons = []
+    panel_html_parts = []
+    for index, (key, title, panel_html) in enumerate(panels):
+        active_class = " active" if index == 0 else ""
+        hidden = "" if index == 0 else " hidden"
+        panel_id = f"{section_key}-{key}"
+        tab_buttons.append(
+            f'<button class="sheet-tab{active_class}" type="button" data-tab-target="{escape(panel_id, quote=True)}">{escape(title)}</button>'
+        )
+        panel_html_parts.append(
+            f'<div class="sheet-panel{active_class}" id="{escape(panel_id, quote=True)}"{hidden}>{panel_html}</div>'
+        )
+
+    return (
+        '<div class="sheet-tabs">'
+        f'<div class="sheet-tab-list">{"".join(tab_buttons)}</div>'
+        f'{"".join(panel_html_parts)}'
+        "</div>",
+        copy_payloads,
+    )
 
 
 def display_order_date(results: list[JobDiffResult]) -> str:
@@ -870,11 +1164,7 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
         else f"TP平台利润（TP手续费-上游手续费{extra_profit_label}）"
     )
 
-    html = f"""
-    <section class="result-section" id="result-section-{index}">
-      <h1>{title_prefix}订单差异对账结果（上游 vs TP） - {escape(platform)}</h1>
-      <p class="formula">{escape(formula_text)}</p>
-      <p class="formula">{escape(total_summary)}</p>
+    summary_html = f"""
       <table class="summary-table">
         <thead>
           <tr><th>项目</th><th>订单笔数/行数</th><th>订单金额(PKR)</th><th>手续费/成本(PKR)</th><th>唯一订单号数</th><th>备注</th><th>操作</th></tr>
@@ -912,6 +1202,18 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
         </tbody>
       </table>
       <div class="file-note">上游：{escape(job_result.job.upstream_path.name)}<br>TP：{escape(job_result.job.backend_path.name)}{duplicate_file_note}</div>
+    """
+    body_html = summary_html
+    if result.special_mode == "finerbit":
+        body_html, detail_payloads = render_finerbit_tabs(summary_html, result, f"g{index}-detail")
+        copy_payloads.update(detail_payloads)
+
+    html = f"""
+    <section class="result-section" id="result-section-{index}">
+      <h1>{title_prefix}订单差异对账结果（上游 vs TP） - {escape(platform)}</h1>
+      <p class="formula">{escape(formula_text)}</p>
+      <p class="formula">{escape(total_summary)}</p>
+      {body_html}
     </section>
     """
     return html, copy_payloads
@@ -1059,6 +1361,71 @@ def render_stats_html(results: list[JobDiffResult]) -> str:
       font-size: 12px;
       line-height: 1.4;
     }}
+    .sheet-tabs {{
+      margin-top: 18px;
+    }}
+    .sheet-tab-list {{
+      display: flex;
+      gap: 4px;
+      overflow-x: auto;
+      border-bottom: 2px solid #1f4e79;
+      margin-bottom: 14px;
+    }}
+    .sheet-tab {{
+      flex: 0 0 auto;
+      min-height: 34px;
+      border: 1px solid #cfd8e3;
+      border-bottom: 0;
+      padding: 6px 14px;
+      color: #1f4e79;
+      background: #f8fafc;
+      font: inherit;
+      font-size: 15px;
+      cursor: pointer;
+    }}
+    .sheet-tab.active {{
+      color: #fff;
+      background: #1f4e79;
+      border-color: #1f4e79;
+      font-weight: 700;
+    }}
+    .sheet-panel[hidden] {{
+      display: none;
+    }}
+    .detail-toolbar {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 8px;
+      color: #17365d;
+      font-size: 16px;
+    }}
+    .detail-copy {{
+      width: auto;
+      min-width: 150px;
+      padding: 2px 12px;
+    }}
+    .detail-table-wrap {{
+      overflow-x: auto;
+      border: 1px solid #d9e2ec;
+    }}
+    .detail-table {{
+      min-width: 1280px;
+      table-layout: auto;
+      border: 0;
+    }}
+    .detail-table th,
+    .detail-table td {{
+      white-space: nowrap;
+      font-size: 13px;
+    }}
+    .empty-detail {{
+      padding: 18px;
+      border: 1px solid #d9e2ec;
+      color: #6b7280;
+      background: #f8fafc;
+    }}
     .toast {{
       position: fixed;
       left: 50%;
@@ -1114,6 +1481,23 @@ def render_stats_html(results: list[JobDiffResult]) -> str:
     }}
 
     document.addEventListener('click', async (event) => {{
+      const tab = event.target.closest('[data-tab-target]');
+      if (tab) {{
+        const tabs = tab.closest('.sheet-tabs');
+        if (!tabs) return;
+        tabs.querySelectorAll('.sheet-tab').forEach((item) => item.classList.remove('active'));
+        tabs.querySelectorAll('.sheet-panel').forEach((panel) => {{
+          panel.classList.remove('active');
+          panel.hidden = true;
+        }});
+        const panel = document.getElementById(tab.dataset.tabTarget);
+        tab.classList.add('active');
+        if (panel) {{
+          panel.hidden = false;
+          panel.classList.add('active');
+        }}
+        return;
+      }}
       const button = event.target.closest('[data-copy-key]');
       if (!button || button.disabled) return;
       const ids = COPY_PAYLOADS[button.dataset.copyKey] || [];

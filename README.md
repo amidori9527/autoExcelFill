@@ -72,6 +72,8 @@ upstream vs TP, then compares the resulting difference order IDs with duplicate
 payment column C to split duplicate orders from remaining differences.
 For this finerBit mode, the upstream fee uses upstream column G amount and
 upstream column D ChannelName: EasyPaisa 4%, JazzCash 2.3%.
+The finerBit channel cost uses the same upstream amount and channel, rounded to
+2 decimal places per order before summing.
 
 Set `[diff_orders] auto_open_html = false` in `config.ini` to stop automatically
 opening the generated HTML. Result HTML filenames include the comparison folder
