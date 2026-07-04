@@ -70,10 +70,16 @@ Batch mode does not copy order IDs to the clipboard automatically.
 When a group contains `代收重复支付订单_<date>.xlsx`, the tool first compares
 upstream vs TP, then compares the resulting difference order IDs with duplicate
 payment column C to split duplicate orders from remaining differences.
+Put `conf.ini` in a comparison group folder to choose the algorithm:
+`[diff_orders] platform = finerbit` or `[diff_orders] platform = easypaisa`.
+If `conf.ini` is missing, unreadable, or does not define `platform`,
+duplicate-payment groups default to `finerbit`.
 For this finerBit mode, the upstream fee uses upstream column G amount and
 upstream column D ChannelName: EasyPaisa 4%, JazzCash 2.3%.
 The finerBit channel cost uses the same upstream amount and channel, rounded to
 2 decimal places per order before summing.
+For easypaisa mode, the upstream fee is upstream columns R + S, and the channel
+cost is TP order amount * 0.02.
 
 Set `[diff_orders] auto_open_html = false` in `config.ini` to stop automatically
 opening the generated HTML. Result HTML filenames include the comparison folder

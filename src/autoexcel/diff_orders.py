@@ -29,6 +29,7 @@ WORKSPACE_DIR_NAME = "workspace"
 DIFF_ORDERS_DIR_NAME = "diffOrders"
 TEMPLATE_FILE_NAME = "order_diff.html"
 CONFIG_FILE_NAME = "config.ini"
+GROUP_CONFIG_FILE_NAME = "conf.ini"
 HEADER_KEYWORDS = {
     "TRANSACTION REFERENCE NUMBER",
     "ReferenceId",
@@ -37,6 +38,7 @@ HEADER_KEYWORDS = {
 }
 UPSTREAM_FILE_PREFIX = "TranDetailReport"
 FINERBIT_UPSTREAM_FILE_PREFIX = "Transaction Details"
+EASYPISA_UPSTREAM_FILE_PREFIX = "TransactionHistoryRecords"
 BACKEND_FILE_PREFIX = "收款订单"
 DUPLICATE_PAYMENT_FILE_KEYWORD = "重复支付订单"
 
@@ -85,6 +87,7 @@ class DiffJob:
     upstream_path: Path
     backend_path: Path
     duplicate_path: Path | None = None
+    platform_mode: str = ""
 
 
 @dataclass(frozen=True)
@@ -274,6 +277,26 @@ def matching_workbooks(
     return matches
 
 
+def matching_workbook_candidates(
+    files: list[Path],
+    matcher: Callable[[Path, str], bool],
+    date_text: str,
+) -> list[Path]:
+    return sorted((path for path in files if matcher(path, date_text)), key=lambda path: path.name)
+
+
+def easypaisa_upstream_paths_for_backends(files: list[Path], backend_paths: list[Path]) -> list[Path]:
+    backend_dirs = {path.parent for path in backend_paths}
+    return sorted(
+        (
+            path
+            for path in files
+            if path.parent in backend_dirs and path.stem == EASYPISA_UPSTREAM_FILE_PREFIX
+        ),
+        key=lambda path: path.name,
+    )
+
+
 def duplicate_path_for_pair(upstream_path: Path, backend_path: Path, duplicate_paths: list[Path]) -> Path | None:
     same_directory = [
         path for path in duplicate_paths if path.parent in {upstream_path.parent, backend_path.parent}
@@ -283,6 +306,57 @@ def duplicate_path_for_pair(upstream_path: Path, backend_path: Path, duplicate_p
     if len(duplicate_paths) == 1:
         return duplicate_paths[0]
     return None
+
+
+def group_directory_for_pair(upstream_path: Path, backend_path: Path) -> Path:
+    if upstream_path.parent == backend_path.parent:
+        return upstream_path.parent
+    return upstream_path.parent
+
+
+def read_group_platform(group_dir: Path) -> str | None:
+    config_path = group_dir / GROUP_CONFIG_FILE_NAME
+    if not config_path.exists():
+        return None
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(config_path, encoding="utf-8")
+    except configparser.Error:
+        try:
+            text = config_path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        for line in text.splitlines():
+            match = re.match(r"\s*platform\s*=\s*([^\s#;]+)", line, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).strip().lower() or None
+        return None
+    for section in ("diff_orders", "platform"):
+        if parser.has_option(section, "platform"):
+            return parser.get(section, "platform", fallback="").strip().lower() or None
+    default_platform = parser.defaults().get("platform", "").strip().lower()
+    if default_platform:
+        return default_platform
+    return None
+
+
+def platform_mode_for_pair(upstream_path: Path, backend_path: Path, duplicate_path: Path | None) -> str:
+    configured_mode = read_group_platform(group_directory_for_pair(upstream_path, backend_path))
+    if configured_mode:
+        return configured_mode
+    if duplicate_path is not None or upstream_path.stem.startswith(FINERBIT_UPSTREAM_FILE_PREFIX):
+        return "finerbit"
+    return ""
+
+
+def make_diff_job(upstream_path: Path, backend_path: Path, duplicate_paths: list[Path]) -> DiffJob:
+    duplicate_path = duplicate_path_for_pair(upstream_path, backend_path, duplicate_paths)
+    return DiffJob(
+        upstream_path=upstream_path,
+        backend_path=backend_path,
+        duplicate_path=duplicate_path,
+        platform_mode=platform_mode_for_pair(upstream_path, backend_path, duplicate_path),
+    )
 
 
 def pair_diff_workbooks(
@@ -296,39 +370,23 @@ def pair_diff_workbooks(
     shared_keys = sorted(upstream_by_key.keys() & backend_by_key.keys())
     if shared_keys and len(shared_keys) == len(upstream_paths) == len(backend_paths):
         return [
-            DiffJob(
-                upstream_path=upstream_by_key[key],
-                backend_path=backend_by_key[key],
-                duplicate_path=duplicate_path_for_pair(upstream_by_key[key], backend_by_key[key], duplicate_paths),
-            )
+            make_diff_job(upstream_by_key[key], backend_by_key[key], duplicate_paths)
             for key in shared_keys
         ]
 
     if len(upstream_paths) == len(backend_paths):
         return [
-            DiffJob(
-                upstream_path=upstream_path,
-                backend_path=backend_path,
-                duplicate_path=duplicate_path_for_pair(upstream_path, backend_path, duplicate_paths),
-            )
+            make_diff_job(upstream_path, backend_path, duplicate_paths)
             for upstream_path, backend_path in zip(upstream_paths, backend_paths)
         ]
     if len(backend_paths) == 1:
         return [
-            DiffJob(
-                upstream_path=upstream_path,
-                backend_path=backend_paths[0],
-                duplicate_path=duplicate_path_for_pair(upstream_path, backend_paths[0], duplicate_paths),
-            )
+            make_diff_job(upstream_path, backend_paths[0], duplicate_paths)
             for upstream_path in upstream_paths
         ]
     if len(upstream_paths) == 1:
         return [
-            DiffJob(
-                upstream_path=upstream_paths[0],
-                backend_path=backend_path,
-                duplicate_path=duplicate_path_for_pair(upstream_paths[0], backend_path, duplicate_paths),
-            )
+            make_diff_job(upstream_paths[0], backend_path, duplicate_paths)
             for backend_path in backend_paths
         ]
 
@@ -341,8 +399,19 @@ def pair_diff_workbooks(
 def find_diff_jobs_by_date(target_date: date) -> tuple[Path, list[DiffJob]]:
     directory, files = find_xlsx_directory()
     date_text = target_date.strftime("%Y%m%d")
-    upstream_paths = matching_workbooks(files, match_upstream_workbook, "上游", date_text)
     backend_paths = matching_workbooks(files, match_backend_workbook, "后台", date_text)
+    upstream_paths = matching_workbook_candidates(files, match_upstream_workbook, date_text)
+    upstream_paths.extend(
+        path for path in easypaisa_upstream_paths_for_backends(files, backend_paths) if path not in upstream_paths
+    )
+    if not upstream_paths:
+        available = "\n  ".join(path.name for path in files) or "无"
+        raise FileNotFoundError(
+            f"没有找到 上游 Excel。目标日期：{date_text}。\n"
+            f"上游文件名示例：TranDetailReport_87382398_{date_text}013343.1587508.xlsx\n"
+            f"或同目录 TransactionHistoryRecords.xlsx\n"
+            f"当前目录文件：\n  {available}"
+        )
     duplicate_paths = sorted(
         (path for path in files if match_duplicate_payment_workbook(path, date_text)),
         key=lambda path: path.name,
@@ -425,6 +494,8 @@ def choose_diff_jobs_interactive() -> list[DiffJob]:
     for index, job in enumerate(jobs, start=1):
         print(f"  {index}. 上游：{job.upstream_path.name} ({format_file_size(job.upstream_path)})")
         print(f"     后台：{job.backend_path.name} ({format_file_size(job.backend_path)})")
+        if job.platform_mode:
+            print(f"     算法：{job.platform_mode}")
         if job.duplicate_path:
             print(f"     重复：{job.duplicate_path.name} ({format_file_size(job.duplicate_path)})")
     print()
@@ -576,7 +647,21 @@ def read_order_entries(
 
 
 def is_finerbit_job(job: DiffJob) -> bool:
-    return job.duplicate_path is not None or job.upstream_path.stem.startswith(FINERBIT_UPSTREAM_FILE_PREFIX)
+    return job.platform_mode == "finerbit"
+
+
+def is_easypaisa_job(job: DiffJob) -> bool:
+    return job.platform_mode in {"easypaisa", "easypasia"}
+
+
+def is_duplicate_payment_mode(mode: str) -> bool:
+    return mode in {"finerbit", "easypaisa"}
+
+
+def special_platform_label(mode: str) -> str:
+    if mode == "easypaisa":
+        return "easypaisa"
+    return "finerBit"
 
 
 def read_job_diff_result(job: DiffJob, args: argparse.Namespace) -> JobDiffResult:
@@ -630,6 +715,57 @@ def read_job_diff_result(job: DiffJob, args: argparse.Namespace) -> JobDiffResul
         result = diff_orders_with_duplicate_payments(a_entries, b_entries, duplicate_entries)
         return JobDiffResult(job=job, result=result)
 
+    if is_easypaisa_job(job):
+        a_entries = read_order_entries(
+            job.upstream_path,
+            id_col="I",
+            amount_col="P",
+            fee_col="R",
+            extra_cols={
+                "transaction_id": "J",
+                "status": "Q",
+                "created_date": "L",
+                "channel_reference_id": "X",
+                "fed": "S",
+            },
+        )
+        b_entries = read_order_entries(
+            job.backend_path,
+            id_col="D",
+            amount_col="G",
+            fee_col="I",
+            payment_method_col="Z",
+            extra_cols={
+                "platform_order_id": "A",
+                "merchant_order_id": "B",
+                "channel_order_id": "C",
+                "completed_at": "W",
+            },
+        )
+        duplicate_entries = (
+            read_order_entries(
+                job.duplicate_path,
+                id_col="C",
+                amount_col="K",
+                fee_col="L",
+                payment_method_col="I",
+                extra_cols={
+                    "platform_payment_order_id": "A",
+                    "merchant_order_id": "B",
+                    "channel_order_id": "D",
+                    "merchant_name": "F",
+                    "channel_cost": "N",
+                    "status": "O",
+                    "tid": "Q",
+                    "completed_at": "R",
+                },
+            )
+            if job.duplicate_path
+            else []
+        )
+        result = diff_orders_with_duplicate_payments(a_entries, b_entries, duplicate_entries, special_mode="easypaisa")
+        return JobDiffResult(job=job, result=result)
+
     a_entries = read_order_entries(job.upstream_path, id_col=args.a_col, amount_col="H")
     b_entries = read_order_entries(job.backend_path, id_col=args.b_col, amount_col="G", fee_col="I")
     return JobDiffResult(job=job, result=diff_orders(a_entries, b_entries))
@@ -658,6 +794,14 @@ def calculated_row_rounded_fee_by_payment_method(entries: list[OrderEntry], amou
         base_amount = entry.fee if amount_source == "fee" else entry.amount
         total += (base_amount * payment_rate(entry.payment_method)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return total
+
+
+def calculated_easypaisa_upstream_fee(entries: list[OrderEntry]) -> Decimal:
+    return sum((entry.fee + decimal_value(extra_value(entry, "fed")) for entry in entries), Decimal("0"))
+
+
+def calculated_easypaisa_channel_cost(entries: list[OrderEntry]) -> Decimal:
+    return sum((entry.amount * Decimal("0.02") for entry in entries), Decimal("0"))
 
 
 def grouped_entries(entries: list[OrderEntry]) -> dict[str, tuple[int, Decimal]]:
@@ -719,12 +863,19 @@ def diff_orders_with_duplicate_payments(
     a_entries: list[OrderEntry],
     b_entries: list[OrderEntry],
     duplicate_entries: list[OrderEntry],
+    special_mode: str = "finerbit",
 ) -> DiffResult:
     base_result = diff_orders(a_entries, b_entries)
     difference_entries = upstream_difference_entries(base_result)
     duplicate_ids = {entry.order_id for entry in duplicate_entries}
     repeated_entries = tuple(entry for entry in difference_entries if entry.order_id in duplicate_ids)
     remaining_entries = tuple(entry for entry in difference_entries if entry.order_id not in duplicate_ids)
+    if special_mode == "easypaisa":
+        a_fee = calculated_easypaisa_upstream_fee(a_entries)
+        channel_cost = calculated_easypaisa_channel_cost(b_entries)
+    else:
+        a_fee = calculated_fee_by_payment_method(a_entries, "amount")
+        channel_cost = calculated_row_rounded_fee_by_payment_method(a_entries, "amount")
     return DiffResult(
         a_entries=base_result.a_entries,
         b_entries=base_result.b_entries,
@@ -740,7 +891,7 @@ def diff_orders_with_duplicate_payments(
         b_duplicate_count=base_result.b_duplicate_count,
         a_amount=base_result.a_amount,
         b_amount=base_result.b_amount,
-        a_fee=calculated_fee_by_payment_method(a_entries, "amount"),
+        a_fee=a_fee,
         b_fee=base_result.b_fee,
         a_only_amount=base_result.a_only_amount,
         b_only_amount=base_result.b_only_amount,
@@ -748,8 +899,8 @@ def diff_orders_with_duplicate_payments(
         duplicate_payment_entries=tuple(unique_entries(duplicate_entries)),
         repeated_difference_entries=repeated_entries,
         remaining_difference_entries=remaining_entries,
-        channel_cost=calculated_row_rounded_fee_by_payment_method(a_entries, "amount"),
-        special_mode="finerbit",
+        channel_cost=channel_cost,
+        special_mode=special_mode,
     )
 
 
@@ -798,10 +949,15 @@ def render_upstream_order_table(entries: list[OrderEntry]) -> str:
 
 def summary_metrics(job_result: JobDiffResult) -> list[SummaryMetric]:
     result = job_result.result
-    if result.special_mode == "finerbit":
+    if is_duplicate_payment_mode(result.special_mode):
+        upstream_note = (
+            "TransactionHistoryRecords I列 Order ID"
+            if result.special_mode == "easypaisa"
+            else "Transaction Details B列 ReferenceId"
+        )
         return [
             SummaryMetric("我方TP订单", result.b_row_count, result.b_amount, result.b_fee, result.b_count, "D列 请求上游订单号", unique_order_ids(result.b_entries)),
-            SummaryMetric("上游订单", result.a_row_count, result.a_amount, result.a_fee, result.a_count, "Transaction Details B列 ReferenceId", unique_order_ids(result.a_entries)),
+            SummaryMetric("上游订单", result.a_row_count, result.a_amount, result.a_fee, result.a_count, upstream_note, unique_order_ids(result.a_entries)),
             SummaryMetric("双方共有", result.common_count, Decimal("0"), None, result.common_count, "两边都存在的订单号", []),
             SummaryMetric("上游独有", len(unique_entries(result.a_only)), result.a_only_amount, None, len(unique_entries(result.a_only)), "上游有，我方TP没有", unique_order_ids(result.a_only)),
             SummaryMetric("我方独有", len(unique_entries(result.b_only)), result.b_only_amount, None, len(unique_entries(result.b_only)), "我方TP有，上游没有", unique_order_ids(result.b_only)),
@@ -857,6 +1013,18 @@ def row_fee(entry: OrderEntry) -> Decimal:
     return (entry.amount * payment_rate(entry.payment_method)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def upstream_entry_fee(entry: OrderEntry, mode: str) -> Decimal:
+    if mode == "easypaisa":
+        return entry.fee + decimal_value(extra_value(entry, "fed"))
+    return row_fee(entry)
+
+
+def channel_cost_entry_fee(entry: OrderEntry, mode: str) -> Decimal:
+    if mode == "easypaisa":
+        return entry.amount * Decimal("0.02")
+    return row_fee(entry)
+
+
 def money_cell(value: Decimal | Any) -> str:
     if isinstance(value, Decimal):
         return money(value)
@@ -904,7 +1072,7 @@ def render_detail_panel(
     return html, {copy_key: order_ids}
 
 
-def tp_detail_rows(entries: list[OrderEntry]) -> list[list[tuple[Any, bool]]]:
+def tp_detail_rows(entries: list[OrderEntry], mode: str) -> list[list[tuple[Any, bool]]]:
     rows: list[list[tuple[Any, bool]]] = []
     for entry in sorted(unique_entries(entries), key=lambda item: item.order_id):
         rows.append(
@@ -915,7 +1083,7 @@ def tp_detail_rows(entries: list[OrderEntry]) -> list[list[tuple[Any, bool]]]:
                 (entry.order_id, False),
                 (entry.amount, True),
                 (entry.fee, True),
-                (row_fee(entry), True),
+                (channel_cost_entry_fee(entry, mode), True),
                 (entry.payment_method, False),
                 (extra_value(entry, "platform_order_id"), False),
                 (extra_value(entry, "merchant_order_id"), False),
@@ -926,7 +1094,7 @@ def tp_detail_rows(entries: list[OrderEntry]) -> list[list[tuple[Any, bool]]]:
     return rows
 
 
-def upstream_detail_rows(entries: list[OrderEntry], source: str, note: str = "") -> list[list[tuple[Any, bool]]]:
+def upstream_detail_rows(entries: list[OrderEntry], source: str, mode: str, note: str = "") -> list[list[tuple[Any, bool]]]:
     rows: list[list[tuple[Any, bool]]] = []
     for entry in sorted(unique_entries(entries), key=lambda item: item.order_id):
         row = [
@@ -934,7 +1102,7 @@ def upstream_detail_rows(entries: list[OrderEntry], source: str, note: str = "")
             (entry.row_number, True),
             (entry.order_id, False),
             (entry.amount, True),
-            (row_fee(entry), True),
+            (upstream_entry_fee(entry, mode), True),
             (entry.payment_method, False),
             (extra_value(entry, "transaction_id"), False),
             (extra_value(entry, "status"), False),
@@ -952,7 +1120,7 @@ def upstream_detail_rows(entries: list[OrderEntry], source: str, note: str = "")
     return rows
 
 
-def final_difference_rows(entries: tuple[OrderEntry, ...]) -> list[list[tuple[Any, bool]]]:
+def final_difference_rows(entries: tuple[OrderEntry, ...], mode: str) -> list[list[tuple[Any, bool]]]:
     rows: list[list[tuple[Any, bool]]] = []
     for entry in sorted(unique_entries(list(entries)), key=lambda item: item.order_id):
         rows.append(
@@ -962,7 +1130,7 @@ def final_difference_rows(entries: tuple[OrderEntry, ...]) -> list[list[tuple[An
                 (entry.order_id, False),
                 (extra_value(entry, "channel_reference_id"), False),
                 (entry.amount, True),
-                (row_fee(entry), True),
+                (upstream_entry_fee(entry, mode), True),
                 (entry.payment_method, False),
                 (extra_value(entry, "status"), False),
                 ("除重复支付之外的差异", False),
@@ -1006,21 +1174,21 @@ def render_finerbit_tabs(summary_html: str, result: DiffResult, section_key: str
             "tp-only",
             "我方独有",
             ["来源", "工作表", "源表行号", "订单号", "金额(PKR)", "手续费(PKR)", "渠道成本(PKR)", "收款方式名称", "平台订单号", "商户订单号", "渠道订单号", "完成时间"],
-            tp_detail_rows(result.b_only),
+            tp_detail_rows(result.b_only, result.special_mode),
             unique_order_ids(result.b_only),
         ),
         (
             "upstream-only",
             "上游独有",
             ["来源", "源表行号", "订单号", "金额(PKR)", "手续费(PKR)", "支付方式", "TransactionId", "状态", "Created Date", "ChannelReferenceId"],
-            upstream_detail_rows(result.a_only, "上游独有"),
+            upstream_detail_rows(result.a_only, "上游独有", result.special_mode),
             unique_order_ids(result.a_only),
         ),
         (
             "repeated",
             "重复订单",
             ["来源", "源表行号", "订单号", "金额(PKR)", "手续费/成本(PKR)", "支付方式", "TransactionId", "状态", "说明"],
-            upstream_detail_rows(list(result.repeated_difference_entries), "上游独有", "差异订单命中代收重复订单"),
+            upstream_detail_rows(list(result.repeated_difference_entries), "上游独有", result.special_mode, "差异订单命中代收重复订单"),
             unique_order_ids(list(result.repeated_difference_entries)),
         ),
         (
@@ -1034,7 +1202,7 @@ def render_finerbit_tabs(summary_html: str, result: DiffResult, section_key: str
             "remaining",
             "最终仍存在差异",
             ["来源", "源表行号", "订单号", "tid", "金额(PKR)", "手续费/成本(PKR)", "支付方式", "状态", "后续处理"],
-            final_difference_rows(result.remaining_difference_entries),
+            final_difference_rows(result.remaining_difference_entries, result.special_mode),
             unique_order_ids(list(result.remaining_difference_entries)),
         ),
     ]
@@ -1110,20 +1278,27 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
     metrics = summary_metrics(job_result)
     metric_rows, copy_payloads = render_metric_rows(metrics, f"g{index}")
     title_prefix = f"第 {index} 组：" if total > 1 else ""
-    profit = result.b_fee - result.a_fee if result.special_mode == "finerbit" else result.b_fee - result.a_fee - result.channel_cost
+    is_special_mode = is_duplicate_payment_mode(result.special_mode)
+    special_label = special_platform_label(result.special_mode)
+    profit = result.b_fee - result.a_fee if is_special_mode else result.b_fee - result.a_fee - result.channel_cost
     total_summary = (
         f"上游合计 {number(result.a_row_count)} 笔 / {money(result.a_amount)} PKR；"
         f"TP合计 {number(result.b_row_count)} 笔 / {money(result.b_amount)} PKR"
     )
-    if result.special_mode == "finerbit":
+    if is_special_mode:
         difference_count = len(upstream_difference_entries(result))
         conclusion = (
             f"差异订单 {number(difference_count)} 个；"
             f"其中 {number(len(result.repeated_difference_entries))} 个为重复订单，"
             f"{number(len(result.remaining_difference_entries))} 个仍存在差异。"
         )
+        upstream_order_note = (
+            "TransactionHistoryRecords I列 Order ID"
+            if result.special_mode == "easypaisa"
+            else "Transaction Details B列 ReferenceId"
+        )
         formula_text = (
-            "我方TP订单 D列 请求上游订单号 vs 上游订单 Transaction Details B列 ReferenceId；"
+            f"我方TP订单 D列 请求上游订单号 vs 上游订单 {upstream_order_note}；"
             "差异订单号 vs 代收重复支付订单 C列 请求上游ID"
         )
     else:
@@ -1133,34 +1308,34 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
             f"金额/笔数不一致 {len(result.mismatched)} 单。"
         )
         formula_text = total_summary
-    extra_profit_label = "-渠道成本" if result.special_mode == "finerbit" else ""
+    extra_profit_label = "-渠道成本" if is_special_mode else ""
     duplicate_file_note = (
         f"<br>代收重复：{escape(job_result.job.duplicate_path.name)}" if job_result.job.duplicate_path else ""
     )
-    profit_tp_amount = result.a_amount if result.special_mode == "finerbit" else result.b_amount
-    upstream_platform_label = "finerBit" if result.special_mode == "finerbit" else platform
-    tp_platform_label = "tarspay" if result.special_mode == "finerbit" else "TP"
+    profit_tp_amount = result.a_amount if is_special_mode else result.b_amount
+    upstream_platform_label = special_label if is_special_mode else platform
+    tp_platform_label = "tarspay" if is_special_mode else "TP"
     tp_success_amount_label = (
-        f"{tp_platform_label}平台（finerBit交易成功金额）"
-        if result.special_mode == "finerbit"
+        f"{tp_platform_label}平台（{special_label}交易成功金额）"
+        if is_special_mode
         else f"TP平台（{platform} 交易成功金额）"
     )
     tp_success_count_label = (
-        f"{tp_platform_label}平台（finerBit成功笔数）"
-        if result.special_mode == "finerbit"
+        f"{tp_platform_label}平台（{special_label}成功笔数）"
+        if is_special_mode
         else f"TP平台（{platform} 成功笔数）"
     )
     channel_cost_header = (
-        f'<th class="tp-head">{escape(tp_platform_label)}平台（finerBit渠道成本）</th>'
-        if result.special_mode == "finerbit"
+        f'<th class="tp-head">{escape(tp_platform_label)}平台（{escape(special_label)}渠道成本）</th>'
+        if is_special_mode
         else ""
     )
     channel_cost_cell = (
-        f'<td class="num">{money(result.channel_cost)}</td>' if result.special_mode == "finerbit" else ""
+        f'<td class="num">{money(result.channel_cost)}</td>' if is_special_mode else ""
     )
     profit_header = (
-        f"{escape(tp_platform_label)}平台利润（finerBit）"
-        if result.special_mode == "finerbit"
+        f"{escape(tp_platform_label)}平台利润（{escape(special_label)}）"
+        if is_special_mode
         else f"TP平台利润（TP手续费-上游手续费{extra_profit_label}）"
     )
 
@@ -1204,7 +1379,7 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
       <div class="file-note">上游：{escape(job_result.job.upstream_path.name)}<br>TP：{escape(job_result.job.backend_path.name)}{duplicate_file_note}</div>
     """
     body_html = summary_html
-    if result.special_mode == "finerbit":
+    if is_special_mode:
         body_html, detail_payloads = render_finerbit_tabs(summary_html, result, f"g{index}-detail")
         copy_payloads.update(detail_payloads)
 
@@ -1594,7 +1769,7 @@ def maybe_open_html(path: Path, auto_open_html: bool, label: str) -> None:
 
 def resolve_diff_jobs(args: argparse.Namespace) -> list[DiffJob]:
     if args.a is not None and args.b is not None:
-        return [DiffJob(upstream_path=args.a, backend_path=args.b, duplicate_path=args.duplicate)]
+        return [make_diff_job(args.a, args.b, [args.duplicate] if args.duplicate else [])]
 
     target_date = resolve_target_date(args.target_date)
     directory, jobs = find_diff_jobs_by_date(target_date)
@@ -1607,6 +1782,8 @@ def resolve_diff_jobs(args: argparse.Namespace) -> list[DiffJob]:
     for index, job in enumerate(jobs, start=1):
         print(f"  {index}. 上游：{job.upstream_path.name} ({format_file_size(job.upstream_path)})")
         print(f"     后台：{job.backend_path.name} ({format_file_size(job.backend_path)})")
+        if job.platform_mode:
+            print(f"     算法：{job.platform_mode}")
         if job.duplicate_path:
             print(f"     重复：{job.duplicate_path.name} ({format_file_size(job.duplicate_path)})")
     print()
