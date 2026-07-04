@@ -1003,6 +1003,14 @@ def text_value(value: Any) -> str:
     return str(value)
 
 
+def copy_field_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    return str(value)
+
+
 def extra_value(entry: OrderEntry, key: str) -> Any:
     if not entry.extra:
         return None
@@ -1059,17 +1067,31 @@ def render_detail_panel(
     headers: list[str],
     rows: list[list[tuple[Any, bool]]],
     order_ids: list[str],
+    extra_copy_payloads: list[tuple[str, str, list[str]]] | None = None,
 ) -> tuple[str, dict[str, list[str]]]:
     copy_key = f"{section_key}-{panel_key}"
     disabled = " disabled" if not order_ids else ""
+    payloads: dict[str, list[str]] = {copy_key: order_ids}
+    extra_buttons = []
+    for payload_key, label, values in extra_copy_payloads or []:
+        full_key = f"{copy_key}-{payload_key}"
+        payloads[full_key] = values
+        extra_disabled = " disabled" if not values else ""
+        extra_buttons.append(
+            f'<button class="copy-ids detail-copy" type="button" data-copy-key="{escape(full_key, quote=True)}" '
+            f'data-copy-label="{escape(label, quote=True)}"{extra_disabled}>复制{escape(label)}</button>'
+        )
     html = f"""
       <div class="detail-toolbar">
         <strong>{escape(title)}</strong>
-        <button class="copy-ids detail-copy" type="button" data-copy-key="{escape(copy_key, quote=True)}" data-copy-label="{escape(title, quote=True)}"{disabled}>复制本页订单ID</button>
+        <div class="detail-actions">
+          <button class="copy-ids detail-copy" type="button" data-copy-key="{escape(copy_key, quote=True)}" data-copy-label="订单ID"{disabled}>复制本页订单ID</button>
+          {''.join(extra_buttons)}
+        </div>
       </div>
       {render_detail_table(headers, rows)}
     """
-    return html, {copy_key: order_ids}
+    return html, payloads
 
 
 def tp_detail_rows(entries: list[OrderEntry], mode: str) -> list[list[tuple[Any, bool]]]:
@@ -1139,13 +1161,17 @@ def final_difference_rows(entries: tuple[OrderEntry, ...], mode: str) -> list[li
     return rows
 
 
-def duplicate_detail_rows(result: DiffResult) -> list[list[tuple[Any, bool]]]:
+def repeated_duplicate_entries(result: DiffResult) -> list[OrderEntry]:
     repeated_ids = {entry.order_id for entry in result.repeated_difference_entries}
-    rows: list[list[tuple[Any, bool]]] = []
-    for entry in sorted(
+    return sorted(
         (entry for entry in unique_entries(list(result.duplicate_payment_entries)) if entry.order_id in repeated_ids),
         key=lambda item: item.order_id,
-    ):
+    )
+
+
+def duplicate_detail_rows(entries: list[OrderEntry]) -> list[list[tuple[Any, bool]]]:
+    rows: list[list[tuple[Any, bool]]] = []
+    for entry in entries:
         rows.append(
             [
                 (entry.row_number, True),
@@ -1168,6 +1194,12 @@ def duplicate_detail_rows(result: DiffResult) -> list[list[tuple[Any, bool]]]:
 def render_finerbit_tabs(summary_html: str, result: DiffResult, section_key: str) -> tuple[str, dict[str, list[str]]]:
     copy_payloads: dict[str, list[str]] = {}
     panels: list[tuple[str, str, str]] = [("summary", "汇总", summary_html)]
+    repeated_entries = repeated_duplicate_entries(result)
+    repeated_detail_payloads = [
+        ("amount", "订单金额", [copy_field_value(entry.amount) for entry in repeated_entries]),
+        ("platform-payment-order-id", "平台支付订单号", [copy_field_value(extra_value(entry, "platform_payment_order_id")) for entry in repeated_entries]),
+        ("channel-order-id", "渠道订单号", [copy_field_value(extra_value(entry, "channel_order_id")) for entry in repeated_entries]),
+    ]
 
     detail_specs = [
         (
@@ -1176,6 +1208,7 @@ def render_finerbit_tabs(summary_html: str, result: DiffResult, section_key: str
             ["来源", "工作表", "源表行号", "订单号", "金额(PKR)", "手续费(PKR)", "渠道成本(PKR)", "收款方式名称", "平台订单号", "商户订单号", "渠道订单号", "完成时间"],
             tp_detail_rows(result.b_only, result.special_mode),
             unique_order_ids(result.b_only),
+            [],
         ),
         (
             "upstream-only",
@@ -1183,6 +1216,7 @@ def render_finerbit_tabs(summary_html: str, result: DiffResult, section_key: str
             ["来源", "源表行号", "订单号", "金额(PKR)", "手续费(PKR)", "支付方式", "TransactionId", "状态", "Created Date", "ChannelReferenceId"],
             upstream_detail_rows(result.a_only, "上游独有", result.special_mode),
             unique_order_ids(result.a_only),
+            [],
         ),
         (
             "repeated",
@@ -1190,13 +1224,15 @@ def render_finerbit_tabs(summary_html: str, result: DiffResult, section_key: str
             ["来源", "源表行号", "订单号", "金额(PKR)", "手续费/成本(PKR)", "支付方式", "TransactionId", "状态", "说明"],
             upstream_detail_rows(list(result.repeated_difference_entries), "上游独有", result.special_mode, "差异订单命中代收重复订单"),
             unique_order_ids(list(result.repeated_difference_entries)),
+            [],
         ),
         (
             "repeated-detail",
             "重复订单明细",
             ["源表行号", "请求上游ID", "订单金额(PKR)", "商户手续费", "渠道成本", "支付方式", "平台支付订单号", "商户订单号", "渠道订单号", "商户名称", "状态", "完成时间"],
-            duplicate_detail_rows(result),
+            duplicate_detail_rows(repeated_entries),
             unique_order_ids(list(result.repeated_difference_entries)),
+            repeated_detail_payloads,
         ),
         (
             "remaining",
@@ -1204,11 +1240,12 @@ def render_finerbit_tabs(summary_html: str, result: DiffResult, section_key: str
             ["来源", "源表行号", "订单号", "tid", "金额(PKR)", "手续费/成本(PKR)", "支付方式", "状态", "后续处理"],
             final_difference_rows(result.remaining_difference_entries, result.special_mode),
             unique_order_ids(list(result.remaining_difference_entries)),
+            [],
         ),
     ]
 
-    for key, title, headers, rows, order_ids in detail_specs:
-        panel_html, panel_payloads = render_detail_panel(section_key, key, title, headers, rows, order_ids)
+    for key, title, headers, rows, order_ids, extra_payloads in detail_specs:
+        panel_html, panel_payloads = render_detail_panel(section_key, key, title, headers, rows, order_ids, extra_payloads)
         panels.append((key, title, panel_html))
         copy_payloads.update(panel_payloads)
 
@@ -1576,6 +1613,12 @@ def render_stats_html(results: list[JobDiffResult]) -> str:
       color: #17365d;
       font-size: 16px;
     }}
+    .detail-actions {{
+      display: flex;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 6px;
+    }}
     .detail-copy {{
       width: auto;
       min-width: 150px;
@@ -1677,11 +1720,12 @@ def render_stats_html(results: list[JobDiffResult]) -> str:
       if (!button || button.disabled) return;
       const ids = COPY_PAYLOADS[button.dataset.copyKey] || [];
       if (ids.length === 0) {{
-        showMessage('没有可复制的订单ID');
+        showMessage('没有可复制的内容');
         return;
       }}
       await copyText(ids.join('\\n'));
-      showMessage(`已复制 ${{ids.length}} 个订单ID`);
+      const label = button.dataset.copyLabel || '内容';
+      showMessage(`已复制 ${{ids.length}} 条${{label}}`);
     }});
   </script>
 </body>
