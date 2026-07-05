@@ -1509,7 +1509,7 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
     title_prefix = f"第 {index} 组：" if total > 1 else ""
     is_special_mode = is_duplicate_payment_mode(result.special_mode)
     special_label = special_platform_label(result.special_mode)
-    profit = result.b_fee - result.a_fee if is_special_mode else result.b_fee - result.a_fee - result.channel_cost
+    profit = result.b_fee - result.a_fee if is_special_mode else result.b_fee - result.channel_cost
     total_summary = (
         f"上游合计 {number(result.a_row_count)} 笔 / {money(result.a_amount)} PKR；"
         f"TP合计 {number(result.b_row_count)} 笔 / {money(result.b_amount)} PKR"
@@ -1537,7 +1537,6 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
             f"金额/笔数不一致 {len(result.mismatched)} 单。"
         )
         formula_text = total_summary
-    extra_profit_label = "" if is_special_mode else "-渠道成本"
     duplicate_file_note = (
         f"<br>代收重复：{escape(job_result.job.duplicate_path.name)}" if job_result.job.duplicate_path else ""
     )
@@ -1563,7 +1562,7 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
     profit_header = (
         f"{escape(tp_platform_label)}平台利润（{escape(special_label)}）"
         if is_special_mode
-        else f"TP平台利润（TP手续费-上游手续费{extra_profit_label}）"
+        else "TP平台利润（TP手续费-渠道成本）"
     )
 
     summary_html = f"""
