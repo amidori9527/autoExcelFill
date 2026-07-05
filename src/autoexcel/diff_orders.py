@@ -33,6 +33,7 @@ GROUP_CONFIG_FILE_NAME = "conf.ini"
 HEADER_KEYWORDS = {
     "TRANSACTION REFERENCE NUMBER",
     "ReferenceId",
+    "Order ID",
     "请求上游订单号",
     "请求上游ID",
 }
