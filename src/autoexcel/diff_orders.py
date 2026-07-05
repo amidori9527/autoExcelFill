@@ -37,6 +37,7 @@ HEADER_KEYWORDS = {
     "请求上游ID",
 }
 UPSTREAM_FILE_PREFIX = "TranDetailReport"
+D0_PGW_UPSTREAM_FILE_PREFIX = "PGW_TXNDETAIL"
 FINERBIT_UPSTREAM_FILE_PREFIX = "Transaction Details"
 EASYPISA_UPSTREAM_FILE_PREFIX = "TransactionHistoryRecords"
 BACKEND_FILE_PREFIX = "收款订单"
@@ -227,7 +228,9 @@ def resolve_target_date(value: str | None) -> date:
 
 
 def match_upstream_workbook(path: Path, date_text: str) -> bool:
-    pattern = rf"{re.escape(UPSTREAM_FILE_PREFIX)}[_\-\s]+[^_\-\s]+[_\-\s]+{date_text}"
+    upstream_prefixes = (UPSTREAM_FILE_PREFIX, D0_PGW_UPSTREAM_FILE_PREFIX)
+    prefix_pattern = "|".join(re.escape(prefix) for prefix in upstream_prefixes)
+    pattern = rf"(?:{prefix_pattern})[_\-\s]+[^_\-\s]+[_\-\s]+{date_text}"
     if re.search(pattern, path.stem) is not None:
         return True
     return path.stem.startswith(FINERBIT_UPSTREAM_FILE_PREFIX) and date_text in path.stem
@@ -253,6 +256,7 @@ def latest_matching_workbook(
         raise FileNotFoundError(
             f"没有找到 {label} Excel。目标日期：{date_text}。\n"
             f"上游文件名示例：TranDetailReport_87382398_{date_text}013343.1587508.xlsx\n"
+            f"或 PGW_TXNDETAIL_15488445_{date_text}_063241.xlsx\n"
             f"后台文件名示例：收款订单_{date_text}063100.xlsx\n"
             f"当前目录文件：\n  {available}"
         )
@@ -271,6 +275,7 @@ def matching_workbooks(
         raise FileNotFoundError(
             f"没有找到 {label} Excel。目标日期：{date_text}。\n"
             f"上游文件名示例：TranDetailReport_87382398_{date_text}013343.1587508.xlsx\n"
+            f"或 PGW_TXNDETAIL_15488445_{date_text}_063241.xlsx\n"
             f"后台文件名示例：收款订单_{date_text}063100.xlsx\n"
             f"当前目录文件：\n  {available}"
         )
@@ -409,6 +414,7 @@ def find_diff_jobs_by_date(target_date: date) -> tuple[Path, list[DiffJob]]:
         raise FileNotFoundError(
             f"没有找到 上游 Excel。目标日期：{date_text}。\n"
             f"上游文件名示例：TranDetailReport_87382398_{date_text}013343.1587508.xlsx\n"
+            f"或 PGW_TXNDETAIL_15488445_{date_text}_063241.xlsx\n"
             f"或同目录 TransactionHistoryRecords.xlsx\n"
             f"当前目录文件：\n  {available}"
         )
@@ -966,7 +972,7 @@ def summary_metrics(job_result: JobDiffResult) -> list[SummaryMetric]:
             SummaryMetric("仍存在的差异", len(result.remaining_difference_entries), sum((entry.amount for entry in result.remaining_difference_entries), Decimal("0")), None, len(result.remaining_difference_entries), "完成时间/投诉退款/重复支付后仍需处理", unique_order_ids(list(result.remaining_difference_entries))),
         ]
     return [
-        SummaryMetric("上游订单", result.a_row_count, result.a_amount, result.a_fee, result.a_count, "TranDetailReport", unique_order_ids(result.a_entries)),
+        SummaryMetric("上游订单", result.a_row_count, result.a_amount, result.a_fee, result.a_count, "TranDetailReport / PGW_TXNDETAIL", unique_order_ids(result.a_entries)),
         SummaryMetric("我方TP订单", result.b_row_count, result.b_amount, result.b_fee, result.b_count, "收款订单；手续费取 I 列", unique_order_ids(result.b_entries)),
         SummaryMetric("上游独有订单", len(unique_entries(result.a_only)), result.a_only_amount, None, len(unique_entries(result.a_only)), "上游有，TP没有", unique_order_ids(result.a_only)),
         SummaryMetric("TP独有订单", len(unique_entries(result.b_only)), result.b_only_amount, None, len(unique_entries(result.b_only)), "TP有，上游没有", unique_order_ids(result.b_only)),

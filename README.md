@@ -56,7 +56,7 @@ PYTHONPATH=src python3 -m autoexcel.diff_orders
 The tool asks for a target date, defaults to today, then automatically
 selects files by name:
 
-- upstream: `TranDetailReport_<id>_<YYYYMMDD...>.xlsx`
+- upstream: `TranDetailReport_<id>_<YYYYMMDD...>.xlsx` or `PGW_TXNDETAIL_<id>_<YYYYMMDD>_....xlsx`
 - backend: `收款订单_<YYYYMMDD...>.xlsx`
 
 It compares upstream column L order IDs and H amounts with backend column D

@@ -17,7 +17,7 @@
 - 填表运行时会询问使用默认日期还是手动输入日期
 - 处理完成后窗口显示总结，详细过程在 AutoExcelKit/logs 文件夹中
 - 对账工具会询问目标日期，直接回车默认当天，然后自动匹配文件名：
-  上游 TranDetailReport_<id>_<日期>.xlsx，后台 收款订单_<日期>.xlsx
+  上游 TranDetailReport_<id>_<日期>.xlsx 或 PGW_TXNDETAIL_<id>_<日期>_....xlsx，后台 收款订单_<日期>.xlsx
 - 同一天匹配到多组文件时会批量对比，自动打开汇总 HTML，不自动复制剪贴板
 - 文件夹内存在 代收重复支付订单_<日期>.xlsx 时，会先做上游/TP差异，再用差异订单二次匹配重复支付订单
 - 可在 config.ini 的 [diff_orders] 中设置 auto_open_html=false，关闭自动打开 HTML
