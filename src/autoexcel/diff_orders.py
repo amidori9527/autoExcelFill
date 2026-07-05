@@ -923,6 +923,8 @@ def diff_orders(a_entries: list[OrderEntry], b_entries: list[OrderEntry]) -> Dif
         for order_id in sorted(common_ids)
         if a_grouped[order_id][0] != b_grouped[order_id][0] or a_grouped[order_id][1] != b_grouped[order_id][1]
     ]
+    a_amount = sum((entry.amount for entry in a_entries), Decimal("0"))
+    b_amount = sum((entry.amount for entry in b_entries), Decimal("0"))
 
     return DiffResult(
         a_entries=a_entries,
@@ -937,13 +939,14 @@ def diff_orders(a_entries: list[OrderEntry], b_entries: list[OrderEntry]) -> Dif
         common_count=len(common_ids),
         a_duplicate_count=sum(count - 1 for count in a_counter.values() if count > 1),
         b_duplicate_count=sum(count - 1 for count in b_counter.values() if count > 1),
-        a_amount=sum((entry.amount for entry in a_entries), Decimal("0")),
-        b_amount=sum((entry.amount for entry in b_entries), Decimal("0")),
-        a_fee=sum((entry.amount for entry in a_entries), Decimal("0")) * Decimal("0.0126"),
+        a_amount=a_amount,
+        b_amount=b_amount,
+        a_fee=a_amount * Decimal("0.0126"),
         b_fee=sum((entry.fee for entry in b_entries), Decimal("0")),
         a_only_amount=sum((entry.amount for entry in a_entries if entry.order_id in a_only_ids), Decimal("0")),
         b_only_amount=sum((entry.amount for entry in b_entries if entry.order_id in b_only_ids), Decimal("0")),
         mismatch_amount=sum((a_grouped[order_id][1] for order_id in mismatched), Decimal("0")),
+        channel_cost=b_amount * Decimal("0.0126"),
     )
 
 
@@ -1534,7 +1537,7 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
             f"金额/笔数不一致 {len(result.mismatched)} 单。"
         )
         formula_text = total_summary
-    extra_profit_label = "-渠道成本" if is_special_mode else ""
+    extra_profit_label = "" if is_special_mode else "-渠道成本"
     duplicate_file_note = (
         f"<br>代收重复：{escape(job_result.job.duplicate_path.name)}" if job_result.job.duplicate_path else ""
     )
@@ -1554,11 +1557,9 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
     channel_cost_header = (
         f'<th class="tp-head">{escape(tp_platform_label)}平台（{escape(special_label)}渠道成本）</th>'
         if is_special_mode
-        else ""
+        else f'<th class="tp-head">tarspay平台（{escape(platform)}渠道成本）</th>'
     )
-    channel_cost_cell = (
-        f'<td class="num">{money(result.channel_cost)}</td>' if is_special_mode else ""
-    )
+    channel_cost_cell = f'<td class="num">{money(result.channel_cost)}</td>'
     profit_header = (
         f"{escape(tp_platform_label)}平台利润（{escape(special_label)}）"
         if is_special_mode
