@@ -1197,6 +1197,118 @@ def duplicate_detail_rows(entries: list[OrderEntry]) -> list[list[tuple[Any, boo
     return rows
 
 
+def d0_upstream_detail_rows(entries: list[OrderEntry]) -> list[list[tuple[Any, bool]]]:
+    rows: list[list[tuple[Any, bool]]] = []
+    for entry in sorted(unique_entries(entries), key=lambda item: item.order_id):
+        rows.append(
+            [
+                ("上游独有", False),
+                (entry.sheet_name, False),
+                (entry.row_number, True),
+                (entry.order_id, False),
+                (entry.amount, True),
+            ]
+        )
+    return rows
+
+
+def d0_tp_detail_rows(entries: list[OrderEntry]) -> list[list[tuple[Any, bool]]]:
+    rows: list[list[tuple[Any, bool]]] = []
+    for entry in sorted(unique_entries(entries), key=lambda item: item.order_id):
+        rows.append(
+            [
+                ("TP独有", False),
+                (entry.sheet_name, False),
+                (entry.row_number, True),
+                (entry.order_id, False),
+                (entry.amount, True),
+                (entry.fee, True),
+            ]
+        )
+    return rows
+
+
+def d0_mismatch_rows(result: DiffResult) -> list[list[tuple[Any, bool]]]:
+    a_grouped = grouped_entries(result.a_entries)
+    b_grouped = grouped_entries(result.b_entries)
+    rows: list[list[tuple[Any, bool]]] = []
+    for order_id in result.mismatched:
+        upstream_count, upstream_amount = a_grouped[order_id]
+        tp_count, tp_amount = b_grouped[order_id]
+        rows.append(
+            [
+                (order_id, False),
+                (upstream_count, True),
+                (upstream_amount, True),
+                (tp_count, True),
+                (tp_amount, True),
+                (upstream_count - tp_count, True),
+                (upstream_amount - tp_amount, True),
+            ]
+        )
+    return rows
+
+
+def render_tabs(
+    panels: list[tuple[str, str, str]],
+    section_key: str,
+) -> str:
+    tab_buttons = []
+    panel_html_parts = []
+    for index, (key, title, panel_html) in enumerate(panels):
+        active_class = " active" if index == 0 else ""
+        hidden = "" if index == 0 else " hidden"
+        panel_id = f"{section_key}-{key}"
+        tab_buttons.append(
+            f'<button class="sheet-tab{active_class}" type="button" data-tab-target="{escape(panel_id, quote=True)}">{escape(title)}</button>'
+        )
+        panel_html_parts.append(
+            f'<div class="sheet-panel{active_class}" id="{escape(panel_id, quote=True)}"{hidden}>{panel_html}</div>'
+        )
+
+    return (
+        '<div class="sheet-tabs">'
+        f'<div class="sheet-tab-list">{"".join(tab_buttons)}</div>'
+        f'{"".join(panel_html_parts)}'
+        "</div>"
+    )
+
+
+def render_d0_tabs(summary_html: str, result: DiffResult, section_key: str) -> tuple[str, dict[str, list[str]]]:
+    copy_payloads: dict[str, list[str]] = {}
+    panels: list[tuple[str, str, str]] = [("summary", "汇总", summary_html)]
+    detail_specs = [
+        (
+            "upstream-only",
+            "上游独有",
+            ["来源", "工作表", "源表行号", "订单号", "金额(PKR)"],
+            d0_upstream_detail_rows(result.a_only),
+            unique_order_ids(result.a_only),
+        ),
+        (
+            "tp-only",
+            "TP独有",
+            ["来源", "工作表", "源表行号", "订单号", "金额(PKR)", "手续费(PKR)"],
+            d0_tp_detail_rows(result.b_only),
+            unique_order_ids(result.b_only),
+        ),
+        (
+            "mismatched",
+            "金额/笔数不一致",
+            ["订单号", "上游笔数", "上游金额(PKR)", "TP笔数", "TP金额(PKR)", "笔数差", "金额差(PKR)"],
+            d0_mismatch_rows(result),
+            list(result.mismatched),
+        ),
+    ]
+
+    for key, title, headers, rows, order_ids in detail_specs:
+        panel_html, panel_payloads = render_detail_panel(section_key, key, title, headers, rows, order_ids)
+        panels.append((key, title, panel_html))
+        copy_payloads.update(panel_payloads)
+
+    return render_tabs(panels, section_key), copy_payloads
+
+
 def render_finerbit_tabs(summary_html: str, result: DiffResult, section_key: str) -> tuple[str, dict[str, list[str]]]:
     copy_payloads: dict[str, list[str]] = {}
     panels: list[tuple[str, str, str]] = [("summary", "汇总", summary_html)]
@@ -1255,26 +1367,7 @@ def render_finerbit_tabs(summary_html: str, result: DiffResult, section_key: str
         panels.append((key, title, panel_html))
         copy_payloads.update(panel_payloads)
 
-    tab_buttons = []
-    panel_html_parts = []
-    for index, (key, title, panel_html) in enumerate(panels):
-        active_class = " active" if index == 0 else ""
-        hidden = "" if index == 0 else " hidden"
-        panel_id = f"{section_key}-{key}"
-        tab_buttons.append(
-            f'<button class="sheet-tab{active_class}" type="button" data-tab-target="{escape(panel_id, quote=True)}">{escape(title)}</button>'
-        )
-        panel_html_parts.append(
-            f'<div class="sheet-panel{active_class}" id="{escape(panel_id, quote=True)}"{hidden}>{panel_html}</div>'
-        )
-
-    return (
-        '<div class="sheet-tabs">'
-        f'<div class="sheet-tab-list">{"".join(tab_buttons)}</div>'
-        f'{"".join(panel_html_parts)}'
-        "</div>",
-        copy_payloads,
-    )
+    return render_tabs(panels, section_key), copy_payloads
 
 
 def display_order_date(results: list[JobDiffResult]) -> str:
@@ -1424,6 +1517,9 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
     body_html = summary_html
     if is_special_mode:
         body_html, detail_payloads = render_finerbit_tabs(summary_html, result, f"g{index}-detail")
+        copy_payloads.update(detail_payloads)
+    else:
+        body_html, detail_payloads = render_d0_tabs(summary_html, result, f"g{index}-detail")
         copy_payloads.update(detail_payloads)
 
     html = f"""
