@@ -36,6 +36,29 @@ HEADER_KEYWORDS = {
     "请求上游订单号",
     "请求上游ID",
 }
+PGW_ORDER_ID_HEADERS = {
+    "TRANSACTIONREFERENCENUMBER",
+    "REFERENCENUMBER",
+    "REFERENCEID",
+    "ORDERID",
+    "ORDERNO",
+    "REQUESTUPSTREAMID",
+    "REQUESTUPSTREAMORDERNO",
+    "请求上游订单号",
+    "请求上游ID",
+}
+PGW_AMOUNT_HEADERS = {
+    "AMOUNT",
+    "TRANSACTIONAMOUNT",
+    "TXNAMOUNT",
+    "ORDERAMOUNT",
+    "TOTALAMOUNT",
+    "PAYAMOUNT",
+    "PAIDAMOUNT",
+    "订单金额",
+    "交易金额",
+    "支付金额",
+}
 UPSTREAM_FILE_PREFIX = "TranDetailReport"
 D0_PGW_UPSTREAM_FILE_PREFIX = "PGW_TXNDETAIL"
 FINERBIT_UPSTREAM_FILE_PREFIX = "Transaction Details"
@@ -652,6 +675,70 @@ def read_order_entries(
     return entries
 
 
+def normalized_header(value: Any) -> str:
+    return re.sub(r"[\W_]+", "", str(value or ""), flags=re.UNICODE).upper()
+
+
+def find_header_index(headers: tuple[Any, ...], aliases: set[str]) -> int | None:
+    normalized_aliases = {normalized_header(alias) for alias in aliases}
+    for index, header in enumerate(headers):
+        if normalized_header(header) in normalized_aliases:
+            return index
+    return None
+
+
+def read_pgw_upstream_entries(path: Path) -> list[OrderEntry]:
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    entries: list[OrderEntry] = []
+    missing_sheets: list[str] = []
+    available_headers: list[str] = []
+    for worksheet in workbook.worksheets:
+        header_row_number = 0
+        id_index = None
+        amount_index = None
+        for row_number, row in enumerate(worksheet.iter_rows(max_row=20, values_only=True), start=1):
+            id_index = find_header_index(row, PGW_ORDER_ID_HEADERS)
+            amount_index = find_header_index(row, PGW_AMOUNT_HEADERS)
+            if id_index is not None and amount_index is not None:
+                header_row_number = row_number
+                available_headers = [str(value) for value in row if value not in (None, "")]
+                break
+            if any(value not in (None, "") for value in row):
+                available_headers = [str(value) for value in row if value not in (None, "")]
+        if id_index is None or amount_index is None:
+            missing_sheets.append(worksheet.title)
+            continue
+
+        max_column_index = max(id_index, amount_index) + 1
+        for row_number, row in enumerate(
+            worksheet.iter_rows(
+                min_row=header_row_number + 1,
+                min_col=1,
+                max_col=max_column_index,
+                values_only=True,
+            ),
+            start=header_row_number + 1,
+        ):
+            order_id = normalize_order_id(row[id_index])
+            if order_id is None:
+                continue
+            entries.append(
+                OrderEntry(
+                    order_id=order_id,
+                    row_number=row_number,
+                    amount=decimal_value(row[amount_index]),
+                    sheet_name=worksheet.title,
+                )
+            )
+    if not entries and missing_sheets:
+        headers_text = "、".join(available_headers) or "无可识别表头"
+        raise ValueError(
+            f"{path.name} 未找到 PGW 上游订单号/金额表头，无法计算上游金额。"
+            f"已检查工作表：{', '.join(missing_sheets)}。可见表头：{headers_text}"
+        )
+    return entries
+
+
 def is_finerbit_job(job: DiffJob) -> bool:
     return job.platform_mode == "finerbit"
 
@@ -772,7 +859,10 @@ def read_job_diff_result(job: DiffJob, args: argparse.Namespace) -> JobDiffResul
         result = diff_orders_with_duplicate_payments(a_entries, b_entries, duplicate_entries, special_mode="easypaisa")
         return JobDiffResult(job=job, result=result)
 
-    a_entries = read_order_entries(job.upstream_path, id_col=args.a_col, amount_col="H")
+    if job.upstream_path.stem.startswith(D0_PGW_UPSTREAM_FILE_PREFIX):
+        a_entries = read_pgw_upstream_entries(job.upstream_path)
+    else:
+        a_entries = read_order_entries(job.upstream_path, id_col=args.a_col, amount_col="H")
     b_entries = read_order_entries(job.backend_path, id_col=args.b_col, amount_col="G", fee_col="I")
     return JobDiffResult(job=job, result=diff_orders(a_entries, b_entries))
 
