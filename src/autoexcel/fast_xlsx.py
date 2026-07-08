@@ -34,6 +34,8 @@ class SheetEntry:
 class FastBatchResult:
     changed: list[tuple[str, int]]
     skipped: list[tuple[str, str]]
+    next_start_index: int = 0
+    total_sheets: int = 0
 
 
 def _tag(name: str) -> str:
@@ -365,17 +367,22 @@ def add_current_date_to_colored_sheets_fast(
     xlsx_path: Path,
     current_date: date,
     limit_sheets: int,
+    start_index: int = 0,
     progress: Callable[[str], None] | None = None,
 ) -> FastBatchResult:
     entries = list_sheets(xlsx_path)
+    total_entries = len(entries)
+    scan_start_index = min(max(start_index, 0), total_entries)
     changed: list[tuple[str, int]] = []
     skipped: list[tuple[str, str]] = []
     modified_xml: dict[str, bytes] = {}
+    next_start_index = total_entries
 
     with zipfile.ZipFile(xlsx_path, "r") as archive:
-        total_entries = len(entries)
-        for index, entry in enumerate(entries, start=1):
+        for zero_index, entry in enumerate(entries[scan_start_index:], start=scan_start_index):
+            index = zero_index + 1
             if len(changed) >= limit_sheets:
+                next_start_index = zero_index
                 break
 
             if progress is not None:
@@ -392,7 +399,12 @@ def add_current_date_to_colored_sheets_fast(
             changed.append((entry.name, inserted_row))
 
         if not modified_xml:
-            return FastBatchResult(changed=changed, skipped=skipped)
+            return FastBatchResult(
+                changed=changed,
+                skipped=skipped,
+                next_start_index=next_start_index,
+                total_sheets=total_entries,
+            )
 
         if progress is not None:
             progress(f"  writing workbook: {len(changed)} sheet(s) changed...")
@@ -423,4 +435,9 @@ def add_current_date_to_colored_sheets_fast(
         if tmp_path.exists():
             tmp_path.unlink()
 
-    return FastBatchResult(changed=changed, skipped=skipped)
+    return FastBatchResult(
+        changed=changed,
+        skipped=skipped,
+        next_start_index=next_start_index,
+        total_sheets=total_entries,
+    )

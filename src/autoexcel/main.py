@@ -436,6 +436,7 @@ def main() -> None:
             if not args.colored_sheets:
                 raise ValueError("--fast-xml currently requires --colored-sheets")
             batch_number = 0
+            start_index = 0
             while True:
                 batch_number += 1
                 summary.batch_count = batch_number
@@ -446,8 +447,10 @@ def main() -> None:
                     xlsx_path=args.workbook,
                     current_date=current_date,
                     limit_sheets=args.limit_sheets or 20,
+                    start_index=start_index,
                     progress=lambda message: print(message, flush=True),
                 )
+                start_index = result.next_start_index
                 changed_count = len(result.changed)
                 summary.changed.extend(result.changed)
                 summary.skipped_count += len(result.skipped)
@@ -459,7 +462,7 @@ def main() -> None:
                     append_log(log_path, f"  skipped: {sheet_name} ({reason})")
                 append_log(log_path, "")
 
-                if not args.run_until_done or changed_count == 0:
+                if not args.run_until_done or changed_count == 0 or start_index >= result.total_sheets:
                     if changed_count == 0:
                         append_log(log_path, "没有更多可处理的彩色标签 sheet。")
                     append_log(log_path, f"结束时间: {datetime.now():%Y-%m-%d %H:%M:%S}")
