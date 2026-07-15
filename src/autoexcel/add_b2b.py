@@ -12,20 +12,6 @@ import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 
-from PySide6.QtCore import QEvent, Qt
-from PySide6.QtWidgets import (
-    QApplication,
-    QComboBox,
-    QDialog,
-    QFormLayout,
-    QHBoxLayout,
-    QLabel,
-    QMessageBox,
-    QPlainTextEdit,
-    QPushButton,
-    QVBoxLayout,
-)
-
 from autoexcel.fast_xlsx import (
     REL_NS,
     _cell_at,
@@ -513,101 +499,66 @@ def append_b2b_to_workbook(
     )
 
 
-class B2BInputDialog(QDialog):
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("新增 B2B 数据")
-        self.setMinimumSize(760, 420)
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("粘贴多行数据，按 Enter 提交："))
-        self.input = QPlainTextEdit()
-        self.input.setPlaceholderText(
-            "2026-07-12 22:04:23  75NVDJEI  01635548053  01850801086  50000"
+def read_input_text_from_terminal() -> str:
+    if not sys.stdin.isatty():
+        raise RuntimeError("新增 B2B 数据需要在可输入的终端中运行。")
+
+    print("请粘贴多行 B2B 数据；粘贴完成后，在空白行按 Enter 提交。")
+    print("示例：2026-07-12 22:04:23  75NVDJEI  01635548053  01850801086  -50000")
+    rows: list[str] = []
+    while True:
+        raw = input("数据：" if not rows else "")
+        if not raw.strip():
+            return "\n".join(rows)
+        rows.append(raw)
+
+
+def _prompt_field_index(
+    label: str,
+    fields: tuple[InputField, ...],
+    default_index: int,
+) -> int:
+    while True:
+        raw = input(f"{label}字段编号，直接回车默认 {default_index + 1}：").strip()
+        if not raw:
+            return default_index
+        if raw.isdigit() and 1 <= int(raw) <= len(fields):
+            return int(raw) - 1
+        print(f"请输入 1 到 {len(fields)} 之间的字段编号。")
+
+
+def choose_field_mapping(fields: tuple[InputField, ...]) -> FieldMapping:
+    defaults = guess_field_mapping(fields)
+    print("\n第一行字段：")
+    for index, field in enumerate(fields, start=1):
+        print(f"  {index}. {field.value}")
+    print("\n自动识别结果：")
+    for label, index in (
+        ("日期时间（B、C列）", defaults.date_time),
+        ("TRXID（I列）", defaults.trx_id),
+        ("转出卡号（D列）", defaults.outgoing_card),
+        ("金额（E列）", defaults.amount),
+    ):
+        print(f"  {label}：字段 {index + 1}（{fields[index].value}）")
+    print("  提取收款卡号（G列）：留空")
+
+    while True:
+        choice = input("直接回车使用自动识别；输入 m 手动修改：").strip().lower()
+        if not choice:
+            return defaults
+        if choice != "m":
+            print("请输入 m，或直接回车使用自动识别结果。")
+            continue
+
+        mapping = FieldMapping(
+            date_time=_prompt_field_index("日期时间（B、C列）", fields, defaults.date_time),
+            trx_id=_prompt_field_index("TRXID（I列）", fields, defaults.trx_id),
+            outgoing_card=_prompt_field_index("转出卡号（D列）", fields, defaults.outgoing_card),
+            amount=_prompt_field_index("金额（E列）", fields, defaults.amount),
         )
-        self.input.installEventFilter(self)
-        layout.addWidget(self.input)
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        cancel = QPushButton("取消")
-        cancel.clicked.connect(self.reject)
-        submit = QPushButton("下一步")
-        submit.clicked.connect(self.accept)
-        buttons.addWidget(cancel)
-        buttons.addWidget(submit)
-        layout.addLayout(buttons)
-
-    def eventFilter(self, watched, event) -> bool:
-        if (
-            watched is self.input
-            and event.type() == QEvent.KeyPress
-            and event.key() in (Qt.Key_Return, Qt.Key_Enter)
-            and not event.modifiers()
-        ):
-            self.accept()
-            return True
-        return super().eventFilter(watched, event)
-
-    def text(self) -> str:
-        return self.input.toPlainText()
-
-
-class FieldMappingDialog(QDialog):
-    def __init__(self, fields: tuple[InputField, ...], parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("确认 B2B 字段对应关系")
-        self.setMinimumWidth(680)
-        layout = QVBoxLayout(self)
-        layout.addWidget(
-            QLabel("以下内容来自第一条数据，请确认每个值要写入的列：")
-        )
-        for index, field in enumerate(fields, start=1):
-            layout.addWidget(QLabel(f"字段 {index}：{field.value}"))
-
-        defaults = guess_field_mapping(fields)
-        options = [f"字段 {index}：{field.value}" for index, field in enumerate(fields, start=1)]
-        form = QFormLayout()
-        self.selectors: dict[str, QComboBox] = {}
-        labels_and_defaults = (
-            ("date_time", "日期时间（B、C列）", defaults.date_time),
-            ("trx_id", "TRXID（I列）", defaults.trx_id),
-            ("outgoing_card", "转出卡号（D列）", defaults.outgoing_card),
-            ("amount", "金额（E列）", defaults.amount),
-        )
-        for key, label, default in labels_and_defaults:
-            selector = QComboBox()
-            selector.addItems(options)
-            selector.setCurrentIndex(default)
-            self.selectors[key] = selector
-            form.addRow(label, selector)
-        layout.addLayout(form)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        cancel = QPushButton("取消")
-        cancel.clicked.connect(self.reject)
-        confirm = QPushButton("确认并写入")
-        confirm.clicked.connect(self.accept)
-        buttons.addWidget(cancel)
-        buttons.addWidget(confirm)
-        layout.addLayout(buttons)
-
-    def mapping(self) -> FieldMapping:
-        return FieldMapping(
-            date_time=self.selectors["date_time"].currentIndex(),
-            trx_id=self.selectors["trx_id"].currentIndex(),
-            outgoing_card=self.selectors["outgoing_card"].currentIndex(),
-            amount=self.selectors["amount"].currentIndex(),
-        )
-
-    def accept(self) -> None:
-        if len(set(_mapping_indexes(self.mapping()))) != 4:
-            QMessageBox.warning(
-                self,
-                "字段重复",
-                "四个目标字段必须分别选择不同的示例值。",
-            )
-            return
-        super().accept()
+        if len(set(_mapping_indexes(mapping))) == 4:
+            return mapping
+        print("四个目标字段必须分别选择不同的字段，请重新选择。")
 
 
 def main() -> int:
@@ -615,16 +566,9 @@ def main() -> int:
         print("Excel 新增 B2B 数据工具")
         print("----------------------------------------")
         selected_file = choose_workbook_from_current_directory()
-        app = QApplication.instance() or QApplication(sys.argv)
-        input_dialog = B2BInputDialog()
-        input_dialog.input.setFocus()
-        if input_dialog.exec() != QDialog.Accepted:
-            return 0
-        lines = parse_input_text(input_dialog.text())
-        mapping_dialog = FieldMappingDialog(lines[0].fields)
-        if mapping_dialog.exec() != QDialog.Accepted:
-            return 0
-        result = append_b2b_to_workbook(selected_file, lines, mapping_dialog.mapping())
+        lines = parse_input_text(read_input_text_from_terminal())
+        mapping = choose_field_mapping(lines[0].fields)
+        result = append_b2b_to_workbook(selected_file, lines, mapping)
     except Exception as error:
         print(f"新增 B2B 数据失败：{error}")
         return 1

@@ -5,6 +5,10 @@ description = "Excel automation scripts for data.xlsx."
 requires-python = ">=3.10"
 dependencies = [
     "openpyxl>=3.1.5",
+]
+
+[project.optional-dependencies]
+gui = [
     "PySide6-Essentials>=6.8,<7",
     "cryptography>=44,<46",
 ]

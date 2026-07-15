@@ -15,7 +15,13 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Running tests..."
 $env:PYTHONPATH = Join-Path $Root "src"
-& $Python -m unittest discover -s tests
+& $Python -m unittest `
+  tests.test_add_b2b `
+  tests.test_add_cards `
+  tests.test_config_editor `
+  tests.test_fast_xlsx `
+  tests.test_gui_tasks `
+  tests.test_runtime_paths
 if ($LASTEXITCODE -ne 0) {
   throw "Tests failed with exit code $LASTEXITCODE"
 }

@@ -51,7 +51,7 @@ Run the PySide6 desktop interface from source:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements-gui.txt
 PYTHONPATH=src .venv/bin/python -m autoexcel.gui
 ```
 
@@ -76,9 +76,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\package-windows.ps1 -Python ".\.venv\Scripts\python.exe"
 ```
 
-The script installs dependencies, runs the test suite, builds all five command
-line tools, verifies that every expected `.exe` exists, and creates
-`AutoExcelKit-Windows.zip`. The archive includes launchers for fill, order
+The script installs only the command-line toolkit dependencies, runs the
+relevant tests, builds all five command-line tools, verifies that every expected
+`.exe` exists, and creates `AutoExcelKit-Windows.zip`. The toolkit does not
+install or bundle PySide6. The archive includes launchers for fill, order
 comparison, order download, adding cards, and adding B2B data. Do not add real
 workbooks or `loginConf.ini` to the repository before building.
 

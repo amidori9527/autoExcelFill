@@ -27,6 +27,7 @@
 - 拉取订单 Excel 的普通参数在 config.ini 的 [fetch_orders] 中填写
 - 新增 B2B 数据时，负金额会自动转为正数写入；提取收款卡号列默认留空
 - B2B佣金扣除列按提取对应金额的 0.4% 计算
+- B2B 数据可一次粘贴多行，在空白行按 Enter 提交；字段自动识别，输入 m 可手动修改
 - 敏感登录参数请复制 loginConf.example.ini 为 loginConf.ini 后填写
 - 上游服务端参数填 [upstream_server_login]；api_key 已默认填好，用户只需填写 username、password、institution_id
 - fetch-orders.exe 会先登录上游，询问是否生成最新 Excel；直接回车或输入 n 后会继续询问下载日期，默认前一天，并下载该日期第一个可下载文件

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 import zipfile
 
 from openpyxl import Workbook, load_workbook
@@ -10,8 +11,10 @@ from openpyxl import Workbook, load_workbook
 from autoexcel.add_b2b import (
     FieldMapping,
     append_b2b_to_workbook,
+    choose_field_mapping,
     guess_field_mapping,
     parse_input_text,
+    read_input_text_from_terminal,
     validate_and_build_records,
 )
 
@@ -43,6 +46,30 @@ class AddB2BTest(unittest.TestCase):
             ],
         )
         self.assertEqual(guess_field_mapping(lines[0].fields), STANDARD_MAPPING)
+
+    def test_reads_multiline_terminal_input_until_blank_line(self) -> None:
+        first_row, second_row = STANDARD_TEXT.splitlines()
+        with patch("autoexcel.add_b2b.sys.stdin.isatty", return_value=True), patch(
+            "builtins.input", side_effect=[first_row, second_row, ""]
+        ), patch("builtins.print"):
+            self.assertEqual(read_input_text_from_terminal(), STANDARD_TEXT)
+
+    def test_accepts_automatic_terminal_mapping(self) -> None:
+        fields = parse_input_text(STANDARD_TEXT)[0].fields
+        with patch("builtins.input", return_value=""), patch("builtins.print"):
+            self.assertEqual(choose_field_mapping(fields), STANDARD_MAPPING)
+
+    def test_supports_manual_terminal_mapping(self) -> None:
+        fields = parse_input_text(
+            "75NVDJEI 50000 01850801086 2026-07-12 22:04:23 01635548053"
+        )[0].fields
+        with patch(
+            "builtins.input", side_effect=["m", "4", "1", "5", "2"]
+        ), patch("builtins.print"):
+            self.assertEqual(
+                choose_field_mapping(fields),
+                FieldMapping(date_time=3, trx_id=0, outgoing_card=4, amount=1),
+            )
 
     def test_supports_a_different_field_order_selected_from_first_line(self) -> None:
         lines = parse_input_text(
