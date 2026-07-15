@@ -5,10 +5,15 @@ description = "Excel automation scripts for data.xlsx."
 requires-python = ">=3.10"
 dependencies = [
     "openpyxl>=3.1.5",
+    "PySide6>=6.8,<7",
+    "cryptography>=44,<46",
 ]
 
 [project.scripts]
 autoexcel = "autoexcel.main:main"
+autoexcel-add-b2b = "autoexcel.add_b2b:main"
+autoexcel-gui = "autoexcel.gui:main"
+autoexcel-license = "autoexcel.license_tool:main"
 
 [tool.ruff]
 line-length = 100

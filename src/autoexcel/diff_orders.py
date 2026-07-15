@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 from openpyxl import load_workbook
 
+from autoexcel.runtime_paths import application_directory, bundled_resource
 from autoexcel.version import version_text
 from openpyxl.utils import column_index_from_string
 
@@ -138,7 +139,7 @@ def is_frozen_app() -> bool:
 
 def get_executable_directory() -> Path:
     if is_frozen_app():
-        return Path(sys.executable).resolve().parent
+        return application_directory()
     return PROJECT_ROOT
 
 
@@ -479,16 +480,15 @@ def parse_bool(value: str, option_name: str) -> bool:
 
 def get_config_path() -> Path:
     if is_frozen_app():
-        candidates = (
-            get_executable_directory() / CONFIG_FILE_NAME,
-            Path.cwd() / CONFIG_FILE_NAME,
-            PROJECT_ROOT / CONFIG_FILE_NAME,
-        )
+        candidates = [get_executable_directory() / CONFIG_FILE_NAME]
+        if resource_path := bundled_resource(CONFIG_FILE_NAME):
+            candidates.append(resource_path)
+        candidates.extend((Path.cwd() / CONFIG_FILE_NAME, PROJECT_ROOT / CONFIG_FILE_NAME))
     else:
-        candidates = (
+        candidates = [
             Path.cwd() / CONFIG_FILE_NAME,
             PROJECT_ROOT / CONFIG_FILE_NAME,
-        )
+        ]
     for candidate in candidates:
         if candidate.exists():
             return candidate

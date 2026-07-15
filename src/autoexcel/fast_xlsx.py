@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import tempfile
 from typing import Callable
@@ -19,9 +20,11 @@ from openpyxl.utils.datetime import to_excel
 MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
 
 ET.register_namespace("", MAIN_NS)
 ET.register_namespace("r", REL_NS)
+ET.register_namespace("xdr", DRAWING_NS)
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,13 @@ class FastBatchResult:
     skipped: list[tuple[str, str]]
     next_start_index: int = 0
     total_sheets: int = 0
+
+
+@dataclass(frozen=True)
+class IncomeSheetResult:
+    changed: bool
+    inserted_row: int | None = None
+    reason: str | None = None
 
 
 def _tag(name: str) -> str:
@@ -291,6 +301,125 @@ def _update_dimension(root: ET.Element, inserted_row: int) -> None:
         dimension.set("ref", f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{max_row}")
 
 
+def _advance_summary_table_sheet_xml(
+    xml_bytes: bytes,
+    current_date: date,
+    summary_row_number: int,
+    opening_balance_increment: bool = False,
+) -> tuple[bytes, int | None, str | None]:
+    root = ET.fromstring(xml_bytes)
+    sheet_data = root.find(_tag("sheetData"))
+    if sheet_data is None:
+        return xml_bytes, None, "no sheetData"
+
+    rows = sheet_data.findall(_tag("row"))
+    row_by_number = {_row_number(row): row for row in rows}
+    source_row_number = summary_row_number - 1
+    source_row = row_by_number.get(source_row_number)
+    summary_row = row_by_number.get(summary_row_number)
+    if source_row is None or summary_row is None:
+        return xml_bytes, None, "table formula row or total row is missing"
+
+    source_date = _date_from_cell(_cell_at(source_row, "A"))
+    if source_date == current_date:
+        return xml_bytes, None, f"{current_date:%Y-%m-%d} already exists"
+
+    expected_source_date = current_date - timedelta(days=1)
+    if source_date != expected_source_date:
+        found = source_date.strftime("%Y-%m-%d") if source_date else "not a date"
+        return (
+            xml_bytes,
+            None,
+            f"expected penultimate date {expected_source_date:%Y-%m-%d}, found {found}",
+        )
+
+    value_row = _make_value_row(source_row, source_row_number)
+    for row in rows:
+        old_row_number = _row_number(row)
+        if old_row_number < source_row_number:
+            continue
+        new_row_number = old_row_number + 1
+        _translate_formulas(row, original_row=old_row_number, new_row=new_row_number)
+        _set_row_number(row, new_row_number)
+
+    date_cell = _cell_at(source_row, "A")
+    if date_cell is None:
+        date_cell = ET.Element(_tag("c"), {"r": _cell_ref("A", source_row_number + 1)})
+        source_row.insert(0, date_cell)
+    _set_numeric_cell_value(date_cell, to_excel(current_date))
+
+    if opening_balance_increment:
+        opening_balance_cell = _ensure_cell(source_row, "B")
+        _set_formula_cell_value(
+            opening_balance_cell,
+            f"P{source_row_number}+1",
+        )
+
+    insert_at = list(sheet_data).index(source_row)
+    sheet_data.insert(insert_at, value_row)
+    _update_dimension(root, source_row_number)
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True), source_row_number, None
+
+
+def _advance_income_sheet_xml(
+    xml_bytes: bytes,
+    current_date: date,
+) -> tuple[bytes, int | None, str | None]:
+    root = ET.fromstring(xml_bytes)
+    sheet_data = root.find(_tag("sheetData"))
+    rows = sheet_data.findall(_tag("row")) if sheet_data is not None else []
+    if len(rows) < 2:
+        return xml_bytes, None, "fewer than two rows"
+    return _advance_summary_table_sheet_xml(
+        xml_bytes,
+        current_date,
+        summary_row_number=_row_number(rows[-1]),
+    )
+
+
+def _part_rels_path(part_path: str) -> str:
+    path = PurePosixPath(part_path)
+    return str(path.parent / "_rels" / f"{path.name}.rels")
+
+
+def _resolve_part_target(part_path: str, target: str) -> str:
+    if target.startswith("/"):
+        return target.lstrip("/")
+    return posixpath.normpath(str(PurePosixPath(part_path).parent / target))
+
+
+def _expand_table_xml(xml_bytes: bytes, inserted_row: int) -> bytes:
+    root = ET.fromstring(xml_bytes)
+
+    for node in (root, root.find(_tag("autoFilter"))):
+        if node is None:
+            continue
+        ref = node.attrib.get("ref")
+        if not ref or ":" not in ref:
+            continue
+        min_col, min_row, max_col, max_row = range_boundaries(ref)
+        if max_row < inserted_row:
+            continue
+        node.set(
+            "ref",
+            f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{max_row + 1}",
+        )
+
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _shift_drawing_rows(xml_bytes: bytes, inserted_row: int) -> bytes:
+    root = ET.fromstring(xml_bytes)
+    first_shifted_zero_based_row = inserted_row - 1
+    for row_node in root.iter(f"{{{DRAWING_NS}}}row"):
+        if row_node.text is None:
+            continue
+        row_number = int(row_node.text)
+        if row_number >= first_shifted_zero_based_row:
+            row_node.text = str(row_number + 1)
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
 def _add_current_date_to_sheet_xml(xml_bytes: bytes, current_date: date) -> tuple[bytes, int | None, str | None]:
     root = ET.fromstring(xml_bytes)
     if not _has_tab_color(root):
@@ -361,6 +490,135 @@ def _force_full_calculation(workbook_xml: bytes) -> bytes:
     calc_pr.set("fullCalcOnLoad", "1")
     calc_pr.set("forceFullCalc", "1")
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def advance_summary_table_sheet_fast(
+    xlsx_path: Path,
+    sheet_name: str,
+    current_date: date,
+    progress: Callable[[str], None] | None = None,
+    opening_balance_increment: bool = False,
+) -> IncomeSheetResult:
+    entries = list_sheets(xlsx_path)
+    sheet_entry = next((entry for entry in entries if entry.name == sheet_name), None)
+    if sheet_entry is None:
+        return IncomeSheetResult(changed=False, reason=f"missing sheet '{sheet_name}'")
+
+    modified_xml: dict[str, bytes] = {}
+    with zipfile.ZipFile(xlsx_path, "r") as archive:
+        rels_path = _part_rels_path(sheet_entry.path)
+        table_parts: list[tuple[str, bytes, int]] = []
+        if rels_path in archive.namelist():
+            rels = ET.fromstring(archive.read(rels_path))
+            for relationship in rels.findall(_rel_tag("Relationship")):
+                relation_type = relationship.attrib.get("Type", "")
+                target = relationship.attrib.get("Target")
+                if not target:
+                    continue
+                part_path = _resolve_part_target(sheet_entry.path, target)
+                if part_path not in archive.namelist():
+                    continue
+                if relation_type.endswith("/table"):
+                    table_xml = archive.read(part_path)
+                    table_root = ET.fromstring(table_xml)
+                    table_ref = table_root.attrib.get("ref")
+                    has_total_row = (
+                        table_root.attrib.get("totalsRowCount") == "1"
+                        or table_root.attrib.get("totalsRowShown") == "1"
+                    )
+                    if has_total_row and table_ref and ":" in table_ref:
+                        table_parts.append(
+                            (part_path, table_xml, range_boundaries(table_ref)[3])
+                        )
+
+        if not table_parts:
+            return IncomeSheetResult(changed=False, reason="no table with a total row")
+
+        summary_row_number = max(part[2] for part in table_parts)
+        new_xml, inserted_row, reason = _advance_summary_table_sheet_xml(
+            archive.read(sheet_entry.path),
+            current_date,
+            summary_row_number=summary_row_number,
+            opening_balance_increment=opening_balance_increment,
+        )
+        if inserted_row is None:
+            return IncomeSheetResult(changed=False, reason=reason)
+
+        modified_xml[sheet_entry.path] = new_xml
+        for part_path, table_xml, _ in table_parts:
+            modified_xml[part_path] = _expand_table_xml(table_xml, inserted_row)
+
+        if rels_path in archive.namelist():
+            for relationship in rels.findall(_rel_tag("Relationship")):
+                if not relationship.attrib.get("Type", "").endswith("/drawing"):
+                    continue
+                target = relationship.attrib.get("Target")
+                if not target:
+                    continue
+                part_path = _resolve_part_target(sheet_entry.path, target)
+                if part_path in archive.namelist():
+                    modified_xml[part_path] = _shift_drawing_rows(
+                        archive.read(part_path), inserted_row
+                    )
+
+        modified_xml["xl/workbook.xml"] = _force_full_calculation(
+            archive.read("xl/workbook.xml")
+        )
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f"{xlsx_path.stem}.",
+            suffix=".tmp.xlsx",
+            dir=xlsx_path.parent,
+        )
+        os.close(fd)
+        tmp_path = Path(tmp_name)
+        try:
+            if progress is not None:
+                progress(f"  writing sheet: {sheet_name}...")
+            with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as output:
+                for item in archive.infolist():
+                    output.writestr(
+                        item,
+                        modified_xml.get(item.filename, archive.read(item.filename)),
+                    )
+        except Exception:
+            if tmp_path.exists():
+                tmp_path.unlink()
+            raise
+
+    try:
+        os.replace(tmp_path, xlsx_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+    return IncomeSheetResult(changed=True, inserted_row=inserted_row)
+
+
+def advance_income_sheet_fast(
+    xlsx_path: Path,
+    current_date: date,
+    progress: Callable[[str], None] | None = None,
+) -> IncomeSheetResult:
+    return advance_summary_table_sheet_fast(
+        xlsx_path=xlsx_path,
+        sheet_name="收入",
+        current_date=current_date,
+        progress=progress,
+    )
+
+
+def advance_daily_balance_sheet_fast(
+    xlsx_path: Path,
+    current_date: date,
+    progress: Callable[[str], None] | None = None,
+) -> IncomeSheetResult:
+    return advance_summary_table_sheet_fast(
+        xlsx_path=xlsx_path,
+        sheet_name="每日余额监测",
+        current_date=current_date,
+        progress=progress,
+        opening_balance_increment=True,
+    )
 
 
 def add_current_date_to_colored_sheets_fast(

@@ -8,6 +8,7 @@
 4. 对账：把上游和后台 .xlsx 文件放入 workspace\diffOrders 文件夹
 5. 拉取订单：先打开 fetch-orders-user-guide.html，按说明准备 loginConf.ini
 6. 填表双击 run-autoexcel-fill.bat；对账双击 run-diff-orders.bat；拉取订单双击 run-fetch-orders.bat
+7. 增卡双击 run-add-cards.bat；新增 B2B 数据双击 run-add-b2b.bat
 
 默认配置：
 
@@ -24,6 +25,8 @@
 - 可在 config.ini 的 [diff_orders] 中设置 auto_open_html=false，关闭自动打开 HTML
 - 对账结果 HTML 文件名会带上对比组文件夹名，例如 order_diff_jz663_<时间>.html
 - 拉取订单 Excel 的普通参数在 config.ini 的 [fetch_orders] 中填写
+- 新增 B2B 数据时，负金额会自动转为正数写入；提取收款卡号列默认留空
+- B2B佣金扣除列按提取对应金额的 0.4% 计算
 - 敏感登录参数请复制 loginConf.example.ini 为 loginConf.ini 后填写
 - 上游服务端参数填 [upstream_server_login]；api_key 已默认填好，用户只需填写 username、password、institution_id
 - fetch-orders.exe 会先登录上游，询问是否生成最新 Excel；直接回车或输入 n 后会继续询问下载日期，默认前一天，并下载该日期第一个可下载文件

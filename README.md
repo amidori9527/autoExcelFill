@@ -45,6 +45,70 @@ program fails, it writes details to `autoexcel-fill-error.log` next to the
 executable. Successful runs write detailed processing logs to the `logs` folder
 next to the executable.
 
+## Desktop demo
+
+Run the PySide6 desktop interface from source:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+PYTHONPATH=src .venv/bin/python -m autoexcel.gui
+```
+
+Build the desktop application on the current operating system:
+
+```bash
+.venv/bin/pyinstaller -y autoexcel-gui.spec
+```
+
+The macOS build is written to `dist/AutoExcel.app`. Windows produces the
+`dist/AutoExcel` application directory. Build separately on each operating
+system; PyInstaller does not produce a Windows executable from macOS.
+
+### Build the Windows toolkit
+
+Use 64-bit Python 3.10 or newer on Windows. From PowerShell in the repository
+root, create an isolated environment and run the packaging script:
+
+```powershell
+py -3.10 -m venv .venv
+Set-ExecutionPolicy -Scope Process Bypass
+.\package-windows.ps1 -Python ".\.venv\Scripts\python.exe"
+```
+
+The script installs dependencies, runs the test suite, builds all five command
+line tools, verifies that every expected `.exe` exists, and creates
+`AutoExcelKit-Windows.zip`. The archive includes launchers for fill, order
+comparison, order download, adding cards, and adding B2B data. Do not add real
+workbooks or `loginConf.ini` to the repository before building.
+
+The desktop interface includes a visual editor for the global `config.ini`.
+The order comparison page can also edit the selected group's `conf.ini`
+platform setting. Login credentials and session values remain isolated in
+`loginConf.ini` and are never displayed by the settings page.
+
+### Feature licenses
+
+Without a valid license, the desktop interface exposes only Excel fill and
+settings. Order comparison and order download are enabled by an Ed25519-signed
+license key entered in the settings page. The license is stored in `license.key`
+beside the distributed application and is not written to `config.ini`.
+
+Generate a permanent license for both protected features:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m autoexcel.license_tool \
+  --output /tmp/autoexcel-customer.key \
+  --customer customer-name
+```
+
+Add `--expires 2027-12-31` for a license that expires at the end of that UTC
+date. Use `--features order_diff` or `--features fetch_orders` for a partial
+license. The signing key is stored locally at
+`.license/autoexcel-ed25519-private.pem`, is ignored by Git, and must be backed
+up securely. It is never included in PyInstaller output; only the public
+verification key is embedded in the application.
+
 ## Diff Orders
 
 Put the upstream and backend workbooks into `workspace/diffOrders`, then run:

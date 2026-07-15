@@ -14,6 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
+from autoexcel.runtime_paths import application_directory, bundled_resource
 from autoexcel.version import version_text
 
 
@@ -73,7 +74,7 @@ def is_frozen_app() -> bool:
 
 def get_executable_directory() -> Path:
     if is_frozen_app():
-        return Path(sys.executable).resolve().parent
+        return application_directory()
     return PROJECT_ROOT
 
 
@@ -91,16 +92,15 @@ def get_login_config_path() -> Path:
 
 def find_config_path(file_name: str) -> Path:
     if is_frozen_app():
-        candidates = (
-            get_executable_directory() / file_name,
-            Path.cwd() / file_name,
-            PROJECT_ROOT / file_name,
-        )
+        candidates = [get_executable_directory() / file_name]
+        if resource_path := bundled_resource(file_name):
+            candidates.append(resource_path)
+        candidates.extend((Path.cwd() / file_name, PROJECT_ROOT / file_name))
     else:
-        candidates = (
+        candidates = [
             Path.cwd() / file_name,
             PROJECT_ROOT / file_name,
-        )
+        ]
     for candidate in candidates:
         if candidate.exists():
             return candidate

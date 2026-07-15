@@ -1,4 +1,6 @@
 .venv/
+.license/
+license.key
 __pycache__/
 *.py[cod]
 .DS_Store
@@ -13,4 +15,6 @@ result/
 loginConf.ini
 workspace/*.xlsx
 workspace/**/*.xlsx
+workspace/*
+!workspace/.gitkeep
 ~$*.xlsx

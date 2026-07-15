@@ -44,10 +44,38 @@ a_fetch_orders = Analysis(
     noarchive=False,
     optimize=0,
 )
+a_add_cards = Analysis(
+    ['src/autoexcel/add_cards.py'],
+    pathex=['src'],
+    binaries=[],
+    datas=[],
+    hiddenimports=[],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+a_add_b2b = Analysis(
+    ['src/autoexcel/add_b2b.py'],
+    pathex=['src'],
+    binaries=[],
+    datas=[],
+    hiddenimports=[],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
 
 pyz_fill = PYZ(a_fill.pure)
 pyz_diff = PYZ(a_diff.pure)
 pyz_fetch_orders = PYZ(a_fetch_orders.pure)
+pyz_add_cards = PYZ(a_add_cards.pure)
+pyz_add_b2b = PYZ(a_add_b2b.pure)
 
 exe_fill = EXE(
     pyz_fill,
@@ -100,16 +128,56 @@ exe_fetch_orders = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+exe_add_cards = EXE(
+    pyz_add_cards,
+    a_add_cards.scripts,
+    [],
+    exclude_binaries=True,
+    name='add-cards',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+exe_add_b2b = EXE(
+    pyz_add_b2b,
+    a_add_b2b.scripts,
+    [],
+    exclude_binaries=True,
+    name='add-b2b',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
 coll = COLLECT(
     exe_fill,
     exe_diff,
     exe_fetch_orders,
+    exe_add_cards,
+    exe_add_b2b,
     a_fill.binaries,
     a_diff.binaries,
     a_fetch_orders.binaries,
+    a_add_cards.binaries,
+    a_add_b2b.binaries,
     a_fill.datas,
     a_diff.datas,
     a_fetch_orders.datas,
+    a_add_cards.datas,
+    a_add_b2b.datas,
     strip=False,
     upx=True,
     upx_exclude=[],

@@ -8,14 +8,17 @@ xattr -dr com.apple.quarantine "$SCRIPT_DIR" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/run-autoexcel-fill.command" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/run-diff-orders.command" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/run-fetch-orders.command" 2>/dev/null || true
+chmod +x "$SCRIPT_DIR/run-add-b2b.command" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/AutoExcelKit/autoexcel-fill" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/AutoExcelKit/diff-orders" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/AutoExcelKit/fetch-orders" 2>/dev/null || true
+chmod +x "$SCRIPT_DIR/AutoExcelKit/add-b2b" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/autoexcel/autoexcel-fill" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/autoexcel/diff-orders" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/autoexcel/fetch-orders" 2>/dev/null || true
+chmod +x "$SCRIPT_DIR/autoexcel/add-b2b" 2>/dev/null || true
 
 echo
-echo "已完成。现在可以双击 run-autoexcel-fill.command 或 run-diff-orders.command 运行。"
+echo "已完成。现在可以双击对应的 run-*.command 运行。"
 echo "按回车关闭窗口。"
 read

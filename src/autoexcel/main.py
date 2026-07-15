@@ -11,8 +11,12 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from autoexcel.fast_xlsx import add_current_date_to_colored_sheets_fast
+from autoexcel.fast_xlsx import (
+    add_current_date_to_colored_sheets_fast,
+    advance_summary_table_sheet_fast,
+)
 from autoexcel.operations import freeze_colored_sheets_next_day, freeze_next_day_row
+from autoexcel.runtime_paths import application_directory, bundled_resource
 from autoexcel.version import version_text
 from autoexcel.workbook_io import list_sheet_names, preview_sheet
 
@@ -105,16 +109,15 @@ def parse_bool(value: str, option_name: str) -> bool:
 
 def get_config_path() -> Path:
     if is_frozen_app():
-        candidates = (
-            get_executable_directory() / CONFIG_FILE_NAME,
-            Path.cwd() / CONFIG_FILE_NAME,
-            PROJECT_ROOT / CONFIG_FILE_NAME,
-        )
+        candidates = [get_executable_directory() / CONFIG_FILE_NAME]
+        if resource_path := bundled_resource(CONFIG_FILE_NAME):
+            candidates.append(resource_path)
+        candidates.extend((Path.cwd() / CONFIG_FILE_NAME, PROJECT_ROOT / CONFIG_FILE_NAME))
     else:
-        candidates = (
+        candidates = [
             Path.cwd() / CONFIG_FILE_NAME,
             PROJECT_ROOT / CONFIG_FILE_NAME,
-        )
+        ]
     for candidate in candidates:
         if candidate.exists():
             return candidate
@@ -230,7 +233,7 @@ def list_current_xlsx_files(directory: Path) -> list[Path]:
 
 def get_executable_directory() -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        return application_directory()
     return PROJECT_ROOT
 
 
@@ -465,6 +468,37 @@ def main() -> None:
                 if not args.run_until_done or changed_count == 0 or start_index >= result.total_sheets:
                     if changed_count == 0:
                         append_log(log_path, "没有更多可处理的彩色标签 sheet。")
+                    colored_sheets_complete = changed_count == 0 or start_index >= result.total_sheets
+                    if colored_sheets_complete:
+                        for sheet_name, opening_balance_increment in (
+                            ("B2B支出", False),
+                            ("收入", False),
+                            ("每日余额监测", True),
+                        ):
+                            print(f"正在处理{sheet_name}工作表...")
+                            sheet_result = advance_summary_table_sheet_fast(
+                                xlsx_path=args.workbook,
+                                sheet_name=sheet_name,
+                                current_date=current_date,
+                                progress=lambda message: print(message, flush=True),
+                                opening_balance_increment=opening_balance_increment,
+                            )
+                            if sheet_result.changed:
+                                summary.changed.append(
+                                    (sheet_name, sheet_result.inserted_row or 0)
+                                )
+                                append_log(
+                                    log_path,
+                                    f"  changed: {sheet_name} row {sheet_result.inserted_row}",
+                                )
+                            else:
+                                summary.skipped_count += 1
+                                append_log(
+                                    log_path,
+                                    f"  skipped: {sheet_name} ({sheet_result.reason})",
+                                )
+                    else:
+                        append_log(log_path, "彩色工作表尚未全部完成，收入工作表延后处理。")
                     append_log(log_path, f"结束时间: {datetime.now():%Y-%m-%d %H:%M:%S}")
                     print_fill_summary(summary)
                     break
@@ -492,6 +526,8 @@ def main() -> None:
                 limit_sheets=args.limit_sheets,
             )
             workbook.save(args.workbook)
+            workbook.close()
+            values_workbook.close()
             summary.batch_count = 1
             summary.changed.extend(changed)
             summary.skipped_count += len(skipped)
@@ -501,6 +537,27 @@ def main() -> None:
             append_log(log_path, f"Skipped {len(skipped)} colored sheets.")
             for sheet_name, reason in skipped:
                 append_log(log_path, f"  skipped: {sheet_name} ({reason})")
+
+            for sheet_name, opening_balance_increment in (
+                ("B2B支出", False),
+                ("收入", False),
+                ("每日余额监测", True),
+            ):
+                sheet_result = advance_summary_table_sheet_fast(
+                    xlsx_path=args.workbook,
+                    sheet_name=sheet_name,
+                    current_date=current_date,
+                    opening_balance_increment=opening_balance_increment,
+                )
+                if sheet_result.changed:
+                    summary.changed.append((sheet_name, sheet_result.inserted_row or 0))
+                    append_log(
+                        log_path,
+                        f"  changed: {sheet_name} row {sheet_result.inserted_row}",
+                    )
+                else:
+                    summary.skipped_count += 1
+                    append_log(log_path, f"  skipped: {sheet_name} ({sheet_result.reason})")
             append_log(log_path, f"结束时间: {datetime.now():%Y-%m-%d %H:%M:%S}")
             print_fill_summary(summary)
             return

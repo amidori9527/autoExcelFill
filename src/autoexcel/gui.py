@@ -1,0 +1,984 @@
+from __future__ import annotations
+
+import sys
+import traceback
+from datetime import date
+from pathlib import Path
+from threading import Event
+from typing import Callable
+
+from PySide6.QtCore import QDate, QLocale, QObject, QRunnable, QThreadPool, Qt, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices, QFont
+from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication,
+    QCalendarWidget,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSpinBox,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from autoexcel.config_editor import (
+    editable_config_path,
+    read_fill_limit_sheets,
+    read_ini,
+    update_ini,
+)
+from autoexcel.fetch_orders import get_login_config_path
+from autoexcel.gui_tasks import TaskResult, run_diff_task, run_fetch_task, run_fill_task
+from autoexcel.license import (
+    FEATURE_FETCH_ORDERS,
+    FEATURE_ORDER_DIFF,
+    LicenseInfo,
+    install_license,
+    license_file_path,
+    load_license,
+    remove_license,
+)
+from autoexcel.main import default_target_date
+
+
+APP_STYLE = """
+QWidget {
+    color: #172033;
+    font-family: "PingFang SC", "Microsoft YaHei", Arial;
+    font-size: 13px;
+}
+QMainWindow, QWidget#appRoot, QScrollArea#pageScroll > QWidget > QWidget {
+    background: #f6f7fb;
+}
+QFrame#sidebar { background: #111827; border: none; }
+QLabel#sidebarBrand { color: #ffffff; font-size: 21px; font-weight: 700; }
+QLabel#sidebarCaption { color: #7f8ca3; font-size: 11px; }
+QLabel#navSection { color: #667085; font-size: 10px; font-weight: 700; }
+QPushButton#navButton {
+    min-height: 42px; padding: 0 14px; text-align: left;
+    color: #aeb8ca; background: transparent; border: none; border-radius: 8px;
+}
+QPushButton#navButton:hover { color: #ffffff; background: #1e293b; }
+QPushButton#navButton:checked { color: #ffffff; background: #2f5bea; font-weight: 700; }
+QLabel#pageEyebrow { color: #2f5bea; font-size: 11px; font-weight: 700; }
+QLabel#pageTitle { color: #101828; font-size: 27px; font-weight: 700; }
+QLabel#heroTitle { color: #101828; font-size: 31px; font-weight: 700; }
+QLabel#sectionTitle { color: #101828; font-size: 16px; font-weight: 700; }
+QLabel#cardTitle { color: #101828; font-size: 16px; font-weight: 700; }
+QLabel#fieldLabel { color: #344054; font-size: 12px; font-weight: 700; }
+QLabel#muted, QLabel#fieldHint { color: #7a8699; }
+QLabel#fieldHint { font-size: 11px; }
+QLabel#statusPill {
+    color: #3157d5; background: #edf2ff; border-radius: 10px;
+    padding: 3px 9px; font-size: 11px; font-weight: 700;
+}
+QFrame#panel, QFrame#homeCard, QFrame#settingSection {
+    background: #ffffff; border: 1px solid #e5e8ef; border-radius: 12px;
+}
+QFrame#licensePanel {
+    background: #f8faff; border: 1px solid #cdd7fb; border-radius: 12px;
+}
+QLabel#licenseValid { color: #067647; font-weight: 700; }
+QLabel#licenseInvalid { color: #b42318; font-weight: 700; }
+QFrame#homeCard:hover { border-color: #aebcf3; background: #fbfcff; }
+QLabel#cardNumber {
+    color: #2f5bea; background: #edf2ff; border-radius: 9px;
+    font-size: 15px; font-weight: 700; qproperty-alignment: AlignCenter;
+}
+QPushButton {
+    min-height: 34px; border-radius: 7px; padding: 0 14px;
+    border: 1px solid #d7dce5; background: #ffffff; color: #344054;
+}
+QPushButton:hover { background: #f8faff; border-color: #9eafe9; }
+QPushButton#primary { background: #2f5bea; color: #ffffff; border: none; font-weight: 700; }
+QPushButton#primary:hover { background: #244ac7; }
+QPushButton#ghost { background: transparent; border: none; color: #667085; }
+QPushButton#ghost:hover { background: #eef1f6; color: #344054; }
+QPushButton#danger { color: #c4322b; border-color: #f0b9b5; background: #fffafa; }
+QPushButton:disabled { color: #98a2b3; background: #f0f2f5; border-color: #e5e7eb; }
+QLineEdit, QComboBox, QSpinBox {
+    min-height: 36px; border: 1px solid #d7dce5; border-radius: 7px;
+    padding: 0 10px; background: #ffffff; selection-background-color: #2f5bea;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #2f5bea; }
+QComboBox::drop-down { border: none; width: 28px; }
+QCheckBox { spacing: 9px; color: #344054; }
+QCheckBox::indicator { width: 34px; height: 18px; border-radius: 9px; background: #cbd2de; }
+QCheckBox::indicator:checked { background: #2f5bea; image: none; }
+QPlainTextEdit {
+    background: #111827; color: #cbd5e1; border: none; border-radius: 8px;
+    padding: 10px; font-family: Menlo, Consolas, monospace; font-size: 11px;
+}
+QProgressBar { border: none; background: #e8ebf1; border-radius: 3px; height: 6px; }
+QProgressBar::chunk { background: #2f5bea; border-radius: 3px; }
+QScrollArea { border: none; }
+QDialog#calendarDialog { background: #ffffff; }
+QCalendarWidget QWidget { alternate-background-color: #ffffff; }
+QCalendarWidget QTableView {
+    background: #ffffff; border: none; selection-background-color: #2f5bea;
+    selection-color: #ffffff; outline: none;
+}
+"""
+
+
+class TaskCancelled(Exception):
+    pass
+
+
+class WorkerSignals(QObject):
+    log = Signal(str)
+    result = Signal(object)
+    error = Signal(str)
+    cancelled = Signal()
+    finished = Signal()
+
+
+class TaskWorker(QRunnable):
+    def __init__(self, task: Callable[[Callable[[str], None]], TaskResult]) -> None:
+        super().__init__()
+        self.task = task
+        self.signals = WorkerSignals()
+        self.cancel_event = Event()
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+    def _log(self, message: str) -> None:
+        if self.cancel_event.is_set():
+            raise TaskCancelled
+        self.signals.log.emit(message)
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = self.task(self._log)
+            if self.cancel_event.is_set():
+                raise TaskCancelled
+            self.signals.result.emit(result)
+        except TaskCancelled:
+            self.signals.cancelled.emit()
+        except Exception:
+            self.signals.error.emit(traceback.format_exc())
+        finally:
+            self.signals.finished.emit()
+
+
+class CalendarDialog(QDialog):
+    def __init__(self, selected_date: date, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("calendarDialog")
+        self.setWindowTitle("选择日期")
+        self.setModal(True)
+        self.setFixedSize(390, 430)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        header = QHBoxLayout()
+        previous_button = QPushButton("‹")
+        previous_button.setObjectName("ghost")
+        previous_button.setFixedWidth(38)
+        next_button = QPushButton("›")
+        next_button.setObjectName("ghost")
+        next_button.setFixedWidth(38)
+        self.month_label = QLabel()
+        self.month_label.setObjectName("sectionTitle")
+        self.month_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.addWidget(previous_button)
+        header.addWidget(self.month_label, 1)
+        header.addWidget(next_button)
+        layout.addLayout(header)
+
+        self.calendar = QCalendarWidget()
+        self.calendar.setLocale(QLocale(QLocale.Language.Chinese, QLocale.Country.China))
+        self.calendar.setNavigationBarVisible(False)
+        self.calendar.setGridVisible(False)
+        self.calendar.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        self.calendar.setHorizontalHeaderFormat(QCalendarWidget.HorizontalHeaderFormat.SingleLetterDayNames)
+        self.calendar.setSelectedDate(QDate(selected_date.year, selected_date.month, selected_date.day))
+        self.calendar.currentPageChanged.connect(self.update_month_label)
+        self.calendar.activated.connect(lambda _date: self.accept())
+        previous_button.clicked.connect(self.calendar.showPreviousMonth)
+        next_button.clicked.connect(self.calendar.showNextMonth)
+        layout.addWidget(self.calendar, 1)
+
+        footer = QHBoxLayout()
+        yesterday_button = QPushButton("昨天")
+        today_button = QPushButton("今天")
+        cancel_button = QPushButton("取消")
+        confirm_button = QPushButton("确定")
+        confirm_button.setObjectName("primary")
+        yesterday_button.clicked.connect(
+            lambda: self.calendar.setSelectedDate(QDate.currentDate().addDays(-1))
+        )
+        today_button.clicked.connect(lambda: self.calendar.setSelectedDate(QDate.currentDate()))
+        cancel_button.clicked.connect(self.reject)
+        confirm_button.clicked.connect(self.accept)
+        footer.addWidget(yesterday_button)
+        footer.addWidget(today_button)
+        footer.addStretch()
+        footer.addWidget(cancel_button)
+        footer.addWidget(confirm_button)
+        layout.addLayout(footer)
+        self.update_month_label(self.calendar.yearShown(), self.calendar.monthShown())
+
+    def update_month_label(self, year: int, month: int) -> None:
+        self.month_label.setText(f"{year} 年 {month} 月")
+
+    def selected_date(self) -> date:
+        selected = self.calendar.selectedDate()
+        return date(selected.year(), selected.month(), selected.day())
+
+
+class DatePicker(QFrame):
+    date_changed = Signal(object)
+
+    def __init__(self, selected_date: date) -> None:
+        super().__init__()
+        self._date = selected_date
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(7)
+        self.text = QLineEdit()
+        self.text.setReadOnly(True)
+        self.button = QPushButton("选择日期")
+        self.button.clicked.connect(self.open_calendar)
+        layout.addWidget(self.text, 1)
+        layout.addWidget(self.button)
+        self._refresh()
+
+    def value(self) -> date:
+        return self._date
+
+    def set_value(self, value: date) -> None:
+        self._date = value
+        self._refresh()
+        self.date_changed.emit(value)
+
+    def open_calendar(self) -> None:
+        dialog = CalendarDialog(self._date, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.set_value(dialog.selected_date())
+
+    def _refresh(self) -> None:
+        weekday = "一二三四五六日"[self._date.weekday()]
+        self.text.setText(f"{self._date:%Y-%m-%d}   星期{weekday}")
+
+
+class PageHeader(QWidget):
+    def __init__(self, eyebrow: str, title: str, description: str) -> None:
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        eyebrow_label = QLabel(eyebrow.upper())
+        eyebrow_label.setObjectName("pageEyebrow")
+        title_label = QLabel(title)
+        title_label.setObjectName("pageTitle")
+        description_label = QLabel(description)
+        description_label.setObjectName("muted")
+        description_label.setWordWrap(True)
+        layout.addWidget(eyebrow_label)
+        layout.addWidget(title_label)
+        layout.addWidget(description_label)
+
+
+class HomeCard(QFrame):
+    clicked = Signal()
+
+    def __init__(self, number: str, title: str, description: str, accent: str) -> None:
+        super().__init__()
+        self.setObjectName("homeCard")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(165)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+        top = QHBoxLayout()
+        number_label = QLabel(number)
+        number_label.setObjectName("cardNumber")
+        number_label.setFixedSize(38, 34)
+        badge = QLabel(accent)
+        badge.setObjectName("statusPill")
+        badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        top.addWidget(number_label)
+        top.addStretch()
+        top.addWidget(badge)
+        title_label = QLabel(title)
+        title_label.setObjectName("cardTitle")
+        description_label = QLabel(description)
+        description_label.setObjectName("muted")
+        description_label.setWordWrap(True)
+        layout.addLayout(top)
+        layout.addWidget(title_label)
+        layout.addWidget(description_label)
+        layout.addStretch()
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class HomePage(QWidget):
+    page_requested = Signal(int)
+
+    def __init__(self) -> None:
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(40, 36, 40, 36)
+        layout.setSpacing(10)
+        eyebrow = QLabel("AUTOEXCEL DESKTOP")
+        eyebrow.setObjectName("pageEyebrow")
+        title = QLabel("今天要处理什么？")
+        title.setObjectName("heroTitle")
+        subtitle = QLabel("选择一个工具开始，运行过程和结果会保留在当前页面。")
+        subtitle.setObjectName("muted")
+        layout.addWidget(eyebrow)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addSpacing(22)
+
+        self.grid = QGridLayout()
+        self.grid.setHorizontalSpacing(16)
+        self.grid.setVerticalSpacing(16)
+        self.cards = [
+            HomeCard("01", "Excel 日期填充", "批量处理带颜色标签的工作表。", "本地处理"),
+            HomeCard("02", "订单差异比对", "自动匹配订单文件并生成 HTML 汇总。", "生成报告"),
+            HomeCard("03", "订单报表下载", "登录后台并下载指定日期的订单报表。", "需要网络"),
+            HomeCard("04", "配置管理", "可视化维护全局配置和功能参数。", "INI 配置"),
+        ]
+        for index, card in enumerate(self.cards):
+            card.clicked.connect(lambda checked=False, page=index + 1: self.page_requested.emit(page))
+        self.set_feature_access(False, False)
+        layout.addLayout(self.grid)
+        layout.addStretch()
+
+    def set_feature_access(self, order_diff: bool, fetch_orders: bool) -> None:
+        visibility = (True, order_diff, fetch_orders, True)
+        visible_cards = [card for card, visible in zip(self.cards, visibility) if visible]
+        for card in self.cards:
+            self.grid.removeWidget(card)
+            card.setVisible(card in visible_cards)
+        for index, card in enumerate(visible_cards):
+            self.grid.addWidget(card, index // 2, index % 2)
+
+
+class FieldBlock(QWidget):
+    def __init__(self, title: str, control: QWidget, hint: str = "") -> None:
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        label = QLabel(title)
+        label.setObjectName("fieldLabel")
+        layout.addWidget(label)
+        layout.addWidget(control)
+        if hint:
+            hint_label = QLabel(hint)
+            hint_label.setObjectName("fieldHint")
+            hint_label.setWordWrap(True)
+            layout.addWidget(hint_label)
+
+
+class TaskPage(QWidget):
+    def __init__(self, eyebrow: str, title: str, description: str) -> None:
+        super().__init__()
+        self.worker: TaskWorker | None = None
+        self.output_path: Path | None = None
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(40, 32, 40, 30)
+        outer.setSpacing(18)
+        outer.addWidget(PageHeader(eyebrow, title, description))
+
+        self.form_panel = QFrame()
+        self.form_panel.setObjectName("panel")
+        self.form = QVBoxLayout(self.form_panel)
+        self.form.setContentsMargins(22, 20, 22, 20)
+        self.form.setSpacing(14)
+        outer.addWidget(self.form_panel)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(9)
+        self.run_button = QPushButton("开始执行")
+        self.run_button.setObjectName("primary")
+        self.cancel_button = QPushButton("停止")
+        self.cancel_button.setObjectName("danger")
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.clicked.connect(self.cancel_task)
+        self.open_button = QPushButton("打开结果")
+        self.open_button.setVisible(False)
+        self.open_button.clicked.connect(self.open_result)
+        self.status_label = QLabel("准备就绪")
+        self.status_label.setObjectName("muted")
+        actions.addWidget(self.run_button)
+        actions.addWidget(self.cancel_button)
+        actions.addWidget(self.open_button)
+        actions.addStretch()
+        actions.addWidget(self.status_label)
+        outer.addLayout(actions)
+
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        outer.addWidget(self.progress)
+
+        self.log_toggle = QPushButton("执行日志  ▾")
+        self.log_toggle.setObjectName("ghost")
+        self.log_toggle.setCheckable(True)
+        self.log_toggle.setChecked(False)
+        self.log_toggle.setFixedWidth(110)
+        self.log_toggle.clicked.connect(self.toggle_log)
+        outer.addWidget(self.log_toggle)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMinimumHeight(150)
+        self.log_view.setVisible(False)
+        outer.addWidget(self.log_view, 1)
+        outer.addStretch()
+
+    def add_field(self, title: str, control: QWidget, hint: str = "") -> None:
+        self.form.addWidget(FieldBlock(title, control, hint))
+
+    def start_task(self, task: Callable[[Callable[[str], None]], TaskResult]) -> None:
+        self.log_view.clear()
+        self.output_path = None
+        self.open_button.setVisible(False)
+        self.run_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.progress.setRange(0, 0)
+        self.status_label.setText("正在执行…")
+        self.log_toggle.setChecked(True)
+        self.toggle_log(True)
+        self.log_view.appendPlainText("任务已开始")
+        worker = TaskWorker(task)
+        self.worker = worker
+        worker.signals.log.connect(self.log_view.appendPlainText)
+        worker.signals.result.connect(self.task_succeeded)
+        worker.signals.error.connect(self.task_failed)
+        worker.signals.cancelled.connect(self.task_cancelled)
+        worker.signals.finished.connect(self.task_finished)
+        QThreadPool.globalInstance().start(worker)
+
+    def toggle_log(self, visible: bool) -> None:
+        self.log_view.setVisible(visible)
+        self.log_toggle.setText("执行日志  ▴" if visible else "执行日志  ▾")
+
+    def cancel_task(self) -> None:
+        if self.worker:
+            self.cancel_button.setEnabled(False)
+            self.status_label.setText("正在安全停止…")
+            self.worker.cancel()
+
+    @Slot(object)
+    def task_succeeded(self, result: TaskResult) -> None:
+        self.output_path = result.output_path
+        self.status_label.setText(result.summary)
+        self.log_view.appendPlainText(result.summary)
+        self.open_button.setVisible(result.output_path is not None)
+        QMessageBox.information(self, result.title, result.summary)
+
+    @Slot(str)
+    def task_failed(self, details: str) -> None:
+        self.log_view.appendPlainText(details)
+        self.status_label.setText("执行失败，请查看日志")
+        last_line = next((line for line in reversed(details.splitlines()) if line.strip()), "执行失败")
+        QMessageBox.critical(self, "执行失败", last_line)
+
+    @Slot()
+    def task_cancelled(self) -> None:
+        self.status_label.setText("任务已停止")
+        self.log_view.appendPlainText("任务已停止")
+
+    @Slot()
+    def task_finished(self) -> None:
+        self.progress.setRange(0, 1)
+        self.progress.setValue(1)
+        self.run_button.setEnabled(True)
+        self.cancel_button.setEnabled(False)
+        self.worker = None
+
+    def open_result(self) -> None:
+        if self.output_path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.output_path)))
+
+
+class PathPicker(QWidget):
+    def __init__(self, mode: str, initial: str = "", file_filter: str = "") -> None:
+        super().__init__()
+        self.mode = mode
+        self.file_filter = file_filter
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(7)
+        self.edit = QLineEdit(initial)
+        self.edit.setPlaceholderText("请选择路径")
+        button = QPushButton("浏览…")
+        button.clicked.connect(self.choose)
+        layout.addWidget(self.edit, 1)
+        layout.addWidget(button)
+
+    def path(self) -> Path:
+        return Path(self.edit.text().strip()).expanduser()
+
+    def choose(self) -> None:
+        start = self.edit.text().strip() or str(Path.cwd())
+        if self.mode == "directory":
+            selected = QFileDialog.getExistingDirectory(self, "选择目录", start)
+        else:
+            selected, _ = QFileDialog.getOpenFileName(self, "选择文件", start, self.file_filter)
+        if selected:
+            self.edit.setText(selected)
+
+
+class FillPage(TaskPage):
+    def __init__(self) -> None:
+        super().__init__("Local workbook", "Excel 日期填充", "选择工作簿和目标日期，处理过程完全在本机完成。")
+        self.path_picker = PathPicker("file", file_filter="Excel (*.xlsx)")
+        self.date_picker = DatePicker(default_target_date())
+        self.add_field("工作簿", self.path_picker, "处理前请关闭 Excel/WPS 中正在打开的目标文件。")
+        self.add_field("目标日期", self.date_picker)
+        self.run_button.clicked.connect(self.run)
+
+    def run(self) -> None:
+        limit_sheets = read_fill_limit_sheets(editable_config_path())
+        self.start_task(
+            lambda log: run_fill_task(
+                self.path_picker.path(),
+                self.date_picker.value(),
+                log,
+                limit_sheets=limit_sheets,
+            )
+        )
+
+
+class DiffPage(TaskPage):
+    def __init__(self) -> None:
+        super().__init__("Reconciliation", "订单差异比对", "自动匹配所选目录中的上游、后台和重复支付文件。")
+        self.path_picker = PathPicker("directory", str(Path.cwd() / "workspace" / "diffOrders"))
+        self.path_picker.edit.textChanged.connect(self.load_group_config)
+        self.date_picker = DatePicker(date.today())
+        self.platform_combo = QComboBox()
+        self.platform_combo.addItem("自动 / 默认算法", "")
+        self.platform_combo.addItem("finerBit", "finerbit")
+        self.platform_combo.addItem("EasyPaisa", "easypaisa")
+        save_group_button = QPushButton("保存分组配置")
+        save_group_button.clicked.connect(self.save_group_config)
+        platform_row = QWidget()
+        platform_layout = QHBoxLayout(platform_row)
+        platform_layout.setContentsMargins(0, 0, 0, 0)
+        platform_layout.setSpacing(7)
+        platform_layout.addWidget(self.platform_combo, 1)
+        platform_layout.addWidget(save_group_button)
+        self.add_field("订单目录", self.path_picker, "目录可以是 diffOrders，也可以是包含 conf.ini 的具体分组目录。")
+        self.add_field("订单日期", self.date_picker)
+        self.add_field("分组算法（conf.ini）", platform_row, "保存到所选目录的 conf.ini；留空时沿用程序默认判断。")
+        self.run_button.clicked.connect(self.run)
+        self.load_group_config()
+
+    def run(self) -> None:
+        if not load_license().allows(FEATURE_ORDER_DIFF):
+            QMessageBox.warning(self, "功能未授权", "请先在配置管理中验证包含订单比对权限的密钥。")
+            return
+        self.start_task(lambda log: run_diff_task(self.path_picker.path(), self.date_picker.value(), log))
+
+    def load_group_config(self) -> None:
+        config_path = self.path_picker.path() / "conf.ini"
+        parser = read_ini(config_path)
+        value = parser.get("diff_orders", "platform", fallback="").strip().lower()
+        index = self.platform_combo.findData(value)
+        self.platform_combo.setCurrentIndex(max(index, 0))
+
+    def save_group_config(self) -> None:
+        directory = self.path_picker.path()
+        if not directory.is_dir():
+            QMessageBox.warning(self, "无法保存", "请先选择存在的订单分组目录。")
+            return
+        update_ini(
+            directory / "conf.ini",
+            {"diff_orders": {"platform": str(self.platform_combo.currentData())}},
+        )
+        QMessageBox.information(self, "配置已保存", f"已更新 {directory / 'conf.ini'}")
+
+
+class FetchPage(TaskPage):
+    def __init__(self) -> None:
+        super().__init__("Remote report", "订单报表下载", "使用本地登录配置查询并下载指定日期的订单报表。")
+        self.date_picker = DatePicker(default_target_date())
+        self.generate_checkbox = QCheckBox("先生成该日期的最新报表")
+        self.generate_checkbox.setChecked(True)
+        login_hint = QLabel(f"登录配置：{get_login_config_path()}")
+        login_hint.setObjectName("fieldHint")
+        login_hint.setWordWrap(True)
+        self.add_field("报表日期", self.date_picker)
+        self.form.addWidget(self.generate_checkbox)
+        self.form.addWidget(login_hint)
+        self.run_button.clicked.connect(self.run)
+
+    def run(self) -> None:
+        if not load_license().allows(FEATURE_FETCH_ORDERS):
+            QMessageBox.warning(self, "功能未授权", "请先在配置管理中验证包含订单下载权限的密钥。")
+            return
+        self.start_task(
+            lambda log: run_fetch_task(
+                self.date_picker.value(), self.generate_checkbox.isChecked(), log
+            )
+        )
+
+
+class SettingSection(QFrame):
+    def __init__(self, title: str, description: str) -> None:
+        super().__init__()
+        self.setObjectName("settingSection")
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(20, 18, 20, 18)
+        self.layout.setSpacing(13)
+        title_label = QLabel(title)
+        title_label.setObjectName("sectionTitle")
+        description_label = QLabel(description)
+        description_label.setObjectName("fieldHint")
+        description_label.setWordWrap(True)
+        self.layout.addWidget(title_label)
+        self.layout.addWidget(description_label)
+
+    def add_setting(self, label: str, control: QWidget) -> None:
+        row = QHBoxLayout()
+        label_widget = QLabel(label)
+        label_widget.setMinimumWidth(185)
+        row.addWidget(label_widget)
+        row.addWidget(control, 1)
+        self.layout.addLayout(row)
+
+
+class SettingsPage(QWidget):
+    license_changed = Signal(object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.config_path = editable_config_path()
+        self.controls: dict[tuple[str, str], QWidget] = {}
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(40, 30, 40, 24)
+        outer.setSpacing(14)
+        header_row = QHBoxLayout()
+        header_row.addWidget(PageHeader("Application settings", "配置管理", "可视化维护全局 config.ini；账号、密码和会话信息不会在这里显示。"), 1)
+        save_button = QPushButton("保存配置")
+        save_button.setObjectName("primary")
+        save_button.clicked.connect(self.save_values)
+        header_row.addWidget(save_button)
+        outer.addLayout(header_row)
+
+        license_panel = QFrame()
+        license_panel.setObjectName("licensePanel")
+        license_layout = QVBoxLayout(license_panel)
+        license_layout.setContentsMargins(20, 17, 20, 17)
+        license_layout.setSpacing(9)
+        license_header = QHBoxLayout()
+        license_title = QLabel("功能授权密钥")
+        license_title.setObjectName("sectionTitle")
+        self.license_status = QLabel()
+        license_header.addWidget(license_title)
+        license_header.addStretch()
+        license_header.addWidget(self.license_status)
+        license_description = QLabel(
+            "验证成功后开放订单比对和订单下载；密钥仅保存在本机，不写入 config.ini。"
+        )
+        license_description.setObjectName("fieldHint")
+        self.license_input = QLineEdit()
+        self.license_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.license_input.setPlaceholderText("粘贴 AX1 开头的授权密钥")
+        license_actions = QHBoxLayout()
+        validate_button = QPushButton("验证并启用")
+        validate_button.setObjectName("primary")
+        validate_button.clicked.connect(self.validate_and_install_license)
+        remove_button = QPushButton("移除密钥")
+        remove_button.clicked.connect(self.clear_license)
+        license_actions.addWidget(self.license_input, 1)
+        license_actions.addWidget(validate_button)
+        license_actions.addWidget(remove_button)
+        self.license_detail = QLabel()
+        self.license_detail.setObjectName("fieldHint")
+        self.license_detail.setWordWrap(True)
+        license_layout.addLayout(license_header)
+        license_layout.addWidget(license_description)
+        license_layout.addLayout(license_actions)
+        license_layout.addWidget(self.license_detail)
+        outer.addWidget(license_panel)
+
+        path_label = QLabel(f"配置文件：{self.config_path}")
+        path_label.setObjectName("fieldHint")
+        outer.addWidget(path_label)
+        scroll = QScrollArea()
+        scroll.setObjectName("pageScroll")
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 8, 0)
+        content_layout.setSpacing(14)
+
+        fill_section = SettingSection("Excel 填充", "控制批处理方式和默认工作簿。")
+        self.add_text(fill_section, "目标日期", "fill", "target_date", "留空时使用前一天")
+        self.add_number(fill_section, "每批工作表数量", "fill", "limit_sheets", 1, 500)
+        self.add_bool(fill_section, "仅处理彩色标签", "fill", "colored_sheets")
+        self.add_bool(fill_section, "快速 XML 模式", "fill", "fast_xml")
+        self.add_bool(fill_section, "持续运行直至完成", "fill", "run_until_done")
+        self.add_bool(fill_section, "运行前选择工作簿", "fill", "select_workbook")
+        self.add_text(fill_section, "默认工作簿", "fill", "workbook", "可填写文件名或绝对路径")
+
+        diff_section = SettingSection("订单比对", "这里管理全局行为；具体平台算法在订单比对页配置。")
+        self.add_bool(diff_section, "完成后打开 HTML", "diff_orders", "auto_open_html")
+
+        fetch_section = SettingSection("订单下载", "接口与下载设置。登录凭据继续保存在 loginConf.ini。")
+        self.add_text(fetch_section, "登录接口", "fetch_orders", "login_url")
+        self.add_text(fetch_section, "生成报表接口", "fetch_orders", "report_url")
+        self.add_text(fetch_section, "报表列表接口", "fetch_orders", "scheduled_reports_url")
+        self.add_text(fetch_section, "下载接口", "fetch_orders", "download_url")
+        self.add_text(fetch_section, "报表名称", "fetch_orders", "report_name")
+        self.add_text(fetch_section, "交易状态", "fetch_orders", "transaction_status")
+        self.add_text(fetch_section, "下载目录", "fetch_orders", "download_dir")
+        self.add_number(fetch_section, "请求超时（秒）", "fetch_orders", "timeout_seconds", 1, 300)
+        self.add_bool(fetch_section, "验证 SSL 证书", "fetch_orders", "verify_ssl")
+        self.add_text(fetch_section, "Origin", "fetch_orders", "origin")
+        self.add_text(fetch_section, "Referer", "fetch_orders", "referer")
+        self.add_text(fetch_section, "User-Agent", "fetch_orders", "user_agent")
+
+        content_layout.addWidget(fill_section)
+        content_layout.addWidget(diff_section)
+        content_layout.addWidget(fetch_section)
+        content_layout.addStretch()
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
+        self.load_values()
+        self.refresh_license_status()
+
+    def add_text(
+        self,
+        section_widget: SettingSection,
+        label: str,
+        section: str,
+        option: str,
+        placeholder: str = "",
+    ) -> None:
+        control = QLineEdit()
+        control.setPlaceholderText(placeholder)
+        section_widget.add_setting(label, control)
+        self.controls[(section, option)] = control
+
+    def add_number(
+        self,
+        section_widget: SettingSection,
+        label: str,
+        section: str,
+        option: str,
+        minimum: int,
+        maximum: int,
+    ) -> None:
+        control = QSpinBox()
+        control.setRange(minimum, maximum)
+        control.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.PlusMinus)
+        section_widget.add_setting(label, control)
+        self.controls[(section, option)] = control
+
+    def add_bool(
+        self, section_widget: SettingSection, label: str, section: str, option: str
+    ) -> None:
+        control = QCheckBox("启用")
+        section_widget.add_setting(label, control)
+        self.controls[(section, option)] = control
+
+    def load_values(self) -> None:
+        parser = read_ini(self.config_path)
+        for (section, option), control in self.controls.items():
+            value = parser.get(section, option, fallback="")
+            if isinstance(control, QLineEdit):
+                control.setText(value)
+            elif isinstance(control, QSpinBox):
+                control.setValue(int(value or control.minimum()))
+            elif isinstance(control, QCheckBox):
+                control.setChecked(value.strip().lower() in {"1", "yes", "true", "on", "y"})
+
+    def save_values(self) -> None:
+        updates: dict[str, dict[str, str]] = {}
+        for (section, option), control in self.controls.items():
+            if isinstance(control, QLineEdit):
+                value = control.text().strip()
+            elif isinstance(control, QSpinBox):
+                value = str(control.value())
+            else:
+                value = "true" if isinstance(control, QCheckBox) and control.isChecked() else "false"
+            updates.setdefault(section, {})[option] = value
+        update_ini(self.config_path, updates)
+        QMessageBox.information(self, "配置已保存", f"已更新 {self.config_path}")
+
+    def validate_and_install_license(self) -> None:
+        info = install_license(self.license_input.text())
+        if not info.valid:
+            self.refresh_license_status(info)
+            QMessageBox.warning(self, "密钥验证失败", info.message)
+            return
+        self.license_input.clear()
+        self.refresh_license_status(info)
+        self.license_changed.emit(info)
+        QMessageBox.information(self, "密钥验证成功", "订单功能已根据许可证权限开放。")
+
+    def clear_license(self) -> None:
+        remove_license()
+        self.license_input.clear()
+        info = load_license()
+        self.refresh_license_status(info)
+        self.license_changed.emit(info)
+
+    def refresh_license_status(self, info: LicenseInfo | None = None) -> None:
+        current = info or load_license()
+        self.license_status.setText("已授权" if current.valid else "未授权")
+        self.license_status.setObjectName("licenseValid" if current.valid else "licenseInvalid")
+        self.license_status.style().unpolish(self.license_status)
+        self.license_status.style().polish(self.license_status)
+        if not current.valid:
+            self.license_detail.setText(f"{current.message} · 密钥文件：{license_file_path()}")
+            return
+        feature_names: list[str] = []
+        if current.allows(FEATURE_ORDER_DIFF):
+            feature_names.append("订单比对")
+        if current.allows(FEATURE_FETCH_ORDERS):
+            feature_names.append("订单下载")
+        expiration = (
+            current.expires_at.strftime("%Y-%m-%d %H:%M UTC")
+            if current.expires_at
+            else "永久"
+        )
+        self.license_detail.setText(
+            f"许可证：{current.license_id} · 功能：{', '.join(feature_names) or '无'} · 到期：{expiration}"
+        )
+
+
+class Sidebar(QFrame):
+    page_requested = Signal(int)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("sidebar")
+        self.setFixedWidth(220)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 26, 18, 20)
+        layout.setSpacing(8)
+        brand = QLabel("AutoExcel")
+        brand.setObjectName("sidebarBrand")
+        caption = QLabel("DESKTOP WORKSPACE")
+        caption.setObjectName("sidebarCaption")
+        layout.addWidget(brand)
+        layout.addWidget(caption)
+        layout.addSpacing(28)
+        section = QLabel("工作区")
+        section.setObjectName("navSection")
+        layout.addWidget(section)
+        labels = ["00   工作台", "01   Excel 填充", "02   订单比对", "03   订单下载", "04   配置管理"]
+        self.buttons: list[QPushButton] = []
+        for index, label in enumerate(labels):
+            button = QPushButton(label)
+            button.setObjectName("navButton")
+            button.setCheckable(True)
+            button.clicked.connect(lambda checked=False, page=index: self.page_requested.emit(page))
+            layout.addWidget(button)
+            self.buttons.append(button)
+        layout.addStretch()
+        footer = QLabel("本地优先 · 配置可控")
+        footer.setObjectName("sidebarCaption")
+        layout.addWidget(footer)
+        self.select(0)
+
+    def select(self, index: int) -> None:
+        for button_index, button in enumerate(self.buttons):
+            button.setChecked(button_index == index)
+
+    def set_feature_access(self, order_diff: bool, fetch_orders: bool) -> None:
+        self.buttons[2].setVisible(order_diff)
+        self.buttons[3].setVisible(fetch_orders)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("AutoExcel")
+        self.resize(1120, 760)
+        self.setMinimumSize(940, 650)
+        root = QWidget()
+        root.setObjectName("appRoot")
+        layout = QHBoxLayout(root)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.sidebar = Sidebar()
+        self.pages = QStackedWidget()
+        self.home_page = HomePage()
+        self.fill_page = FillPage()
+        self.diff_page = DiffPage()
+        self.fetch_page = FetchPage()
+        self.settings_page = SettingsPage()
+        self.pages.addWidget(self.home_page)
+        self.pages.addWidget(self.fill_page)
+        self.pages.addWidget(self.diff_page)
+        self.pages.addWidget(self.fetch_page)
+        self.pages.addWidget(self.settings_page)
+        layout.addWidget(self.sidebar)
+        layout.addWidget(self.pages, 1)
+        self.setCentralWidget(root)
+        self.sidebar.page_requested.connect(self.show_page)
+        self.home_page.page_requested.connect(self.show_page)
+        self.settings_page.license_changed.connect(self.apply_license)
+        self.apply_license(load_license())
+
+    def show_page(self, index: int) -> None:
+        current_license = load_license()
+        if current_license != self.license_info:
+            self.apply_license(current_license)
+        if index == 2 and not self.license_info.allows(FEATURE_ORDER_DIFF):
+            return
+        if index == 3 and not self.license_info.allows(FEATURE_FETCH_ORDERS):
+            return
+        self.pages.setCurrentIndex(index)
+        self.sidebar.select(index)
+        if index == 4:
+            self.settings_page.load_values()
+            self.settings_page.refresh_license_status()
+
+    @Slot(object)
+    def apply_license(self, info: LicenseInfo) -> None:
+        self.license_info = info
+        order_diff = info.allows(FEATURE_ORDER_DIFF)
+        fetch_orders = info.allows(FEATURE_FETCH_ORDERS)
+        self.sidebar.set_feature_access(order_diff, fetch_orders)
+        self.home_page.set_feature_access(order_diff, fetch_orders)
+        if self.pages.currentIndex() == 2 and not order_diff:
+            self.show_page(0)
+        elif self.pages.currentIndex() == 3 and not fetch_orders:
+            self.show_page(0)
+
+
+def main() -> None:
+    app = QApplication(sys.argv)
+    app.setApplicationName("AutoExcel")
+    app.setStyle("Fusion")
+    app.setStyleSheet(APP_STYLE)
+    app.setFont(QFont("", 13))
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
