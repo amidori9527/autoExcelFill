@@ -9,6 +9,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from autoexcel.license import (
+    FEATURE_ADD_B2B,
+    FEATURE_ADD_CARDS,
     FEATURE_FETCH_ORDERS,
     FEATURE_ORDER_DIFF,
     PRODUCT,
@@ -21,7 +23,7 @@ DEFAULT_PRIVATE_KEY = PROJECT_ROOT / ".license" / "autoexcel-ed25519-private.pem
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate a signed AutoExcel license key.")
+    parser = argparse.ArgumentParser(description="Generate a signed SmartSheet Desk license key.")
     parser.add_argument("--private-key", type=Path, default=DEFAULT_PRIVATE_KEY)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--expires", help="Optional expiration date in YYYY-MM-DD (UTC).")
@@ -29,8 +31,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--features",
         nargs="+",
-        choices=(FEATURE_ORDER_DIFF, FEATURE_FETCH_ORDERS),
-        default=(FEATURE_ORDER_DIFF, FEATURE_FETCH_ORDERS),
+        choices=(
+            FEATURE_ORDER_DIFF,
+            FEATURE_FETCH_ORDERS,
+            FEATURE_ADD_CARDS,
+            FEATURE_ADD_B2B,
+        ),
+        default=(
+            FEATURE_ORDER_DIFF,
+            FEATURE_FETCH_ORDERS,
+            FEATURE_ADD_CARDS,
+            FEATURE_ADD_B2B,
+        ),
     )
     return parser.parse_args()
 

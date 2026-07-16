@@ -27,7 +27,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="AutoExcel",
+    name="SmartSheet Desk",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -46,14 +46,14 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="AutoExcel",
+    name="SmartSheet Desk",
 )
 
 if sys.platform == "darwin":
     app = BUNDLE(
         coll,
-        name="AutoExcel.app",
-        icon=None,
-        bundle_identifier="com.autoexcel.desktop",
+        name="SmartSheet Desk.app",
+        icon="icon/cover.icns",
+        bundle_identifier="com.smartsheetdesk.desktop",
         info_plist={"NSHighResolutionCapable": True},
     )

@@ -6,7 +6,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Callable
 
-from autoexcel import diff_orders, fetch_orders
+from autoexcel import add_b2b, add_cards, diff_orders, fetch_orders
 from autoexcel.fast_xlsx import (
     add_current_date_to_colored_sheets_fast,
     advance_summary_table_sheet_fast,
@@ -24,6 +24,37 @@ class TaskResult:
     output_path: Path | None = None
 
 
+def run_add_cards_task(workbook: Path, text: str, log: LogCallback) -> TaskResult:
+    cards = add_cards.parse_card_numbers(text)
+    if not cards:
+        raise ValueError("请至少输入一个卡号")
+    log(f"正在向 {workbook.name} 添加 {len(cards)} 张卡…")
+    result = add_cards.add_cards_to_workbook(workbook, cards)
+    summary = f"新增 {len(result.created)} 张卡，跳过 {len(result.skipped)} 张。"
+    if result.skipped:
+        details = "；".join(f"{card}（{reason}）" for card, reason in result.skipped)
+        summary = f"{summary} 跳过详情：{details}"
+    return TaskResult("增卡完成", summary, workbook)
+
+
+def run_add_b2b_task(
+    workbook: Path,
+    text: str,
+    mapping: add_b2b.FieldMapping,
+    log: LogCallback,
+) -> TaskResult:
+    lines = add_b2b.parse_input_text(text)
+    log(f"正在向 {workbook.name} 写入 {len(lines)} 行 B2B 数据…")
+    result = add_b2b.append_b2b_to_workbook(workbook, lines, mapping)
+    summary = (
+        f"新增 {result.inserted_count} 行，位置："
+        f"提取B2B!A{result.start_row}:I{result.end_row}。"
+    )
+    if result.converted_negative_count:
+        summary += f" 已将 {result.converted_negative_count} 行负金额转为正数。"
+    return TaskResult("提取B2B完成", summary, workbook)
+
+
 def run_fill_task(
     workbook: Path,
     target_date: date,
@@ -37,7 +68,7 @@ def run_fill_task(
 
     log_path = create_process_log_path()
     summary = FillSummary(workbook=workbook, current_date=target_date, log_path=log_path)
-    append_log(log_path, "AutoExcel 桌面版处理日志")
+    append_log(log_path, "SmartSheet Desk 处理日志")
     append_log(log_path, f"开始时间: {datetime.now():%Y-%m-%d %H:%M:%S}")
     append_log(log_path, f"Workbook: {workbook}")
     append_log(log_path, f"目标日期: {target_date:%Y-%m-%d}")

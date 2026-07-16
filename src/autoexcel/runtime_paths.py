@@ -16,6 +16,18 @@ def application_directory() -> Path:
     return executable.parent
 
 
+def workspace_directory() -> Path:
+    if getattr(sys, "frozen", False):
+        return application_directory() / "workspace"
+    return Path(__file__).resolve().parents[2] / "workspace"
+
+
+def ensure_workspace_directories() -> Path:
+    workspace = workspace_directory()
+    (workspace / "diffOrders").mkdir(parents=True, exist_ok=True)
+    return workspace
+
+
 def bundled_resource(file_name: str) -> Path | None:
     bundle_root = getattr(sys, "_MEIPASS", None)
     if bundle_root is None:

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from autoexcel.add_b2b import FieldMapping, guess_field_mapping, parse_input_text
 from autoexcel.config_editor import (
     editable_config_path,
     read_fill_limit_sheets,
@@ -42,8 +44,17 @@ from autoexcel.config_editor import (
     update_ini,
 )
 from autoexcel.fetch_orders import get_login_config_path
-from autoexcel.gui_tasks import TaskResult, run_diff_task, run_fetch_task, run_fill_task
+from autoexcel.gui_tasks import (
+    TaskResult,
+    run_add_b2b_task,
+    run_add_cards_task,
+    run_diff_task,
+    run_fetch_task,
+    run_fill_task,
+)
 from autoexcel.license import (
+    FEATURE_ADD_B2B,
+    FEATURE_ADD_CARDS,
     FEATURE_FETCH_ORDERS,
     FEATURE_ORDER_DIFF,
     LicenseInfo,
@@ -53,6 +64,7 @@ from autoexcel.license import (
     remove_license,
 )
 from autoexcel.main import default_target_date
+from autoexcel.runtime_paths import ensure_workspace_directories, workspace_directory
 
 
 APP_STYLE = """
@@ -342,7 +354,7 @@ class HomePage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(40, 36, 40, 36)
         layout.setSpacing(10)
-        eyebrow = QLabel("AUTOEXCEL DESKTOP")
+        eyebrow = QLabel("SMARTSHEET DESK")
         eyebrow.setObjectName("pageEyebrow")
         title = QLabel("今天要处理什么？")
         title.setObjectName("heroTitle")
@@ -360,16 +372,24 @@ class HomePage(QWidget):
             HomeCard("01", "Excel 日期填充", "批量处理带颜色标签的工作表。", "本地处理"),
             HomeCard("02", "订单差异比对", "自动匹配订单文件并生成 HTML 汇总。", "生成报告"),
             HomeCard("03", "订单报表下载", "登录后台并下载指定日期的订单报表。", "需要网络"),
-            HomeCard("04", "配置管理", "可视化维护全局配置和功能参数。", "INI 配置"),
+            HomeCard("04", "增卡", "根据模板批量创建卡号工作表。", "付费功能"),
+            HomeCard("05", "提取B2B", "批量提取并写入 B2B 交易数据。", "付费功能"),
+            HomeCard("06", "配置管理", "可视化维护全局配置和功能参数。", "INI 配置"),
         ]
         for index, card in enumerate(self.cards):
             card.clicked.connect(lambda checked=False, page=index + 1: self.page_requested.emit(page))
-        self.set_feature_access(False, False)
+        self.set_feature_access(False, False, False, False)
         layout.addLayout(self.grid)
         layout.addStretch()
 
-    def set_feature_access(self, order_diff: bool, fetch_orders: bool) -> None:
-        visibility = (True, order_diff, fetch_orders, True)
+    def set_feature_access(
+        self,
+        order_diff: bool,
+        fetch_orders: bool,
+        add_cards: bool,
+        add_b2b: bool,
+    ) -> None:
+        visibility = (True, order_diff, fetch_orders, add_cards, add_b2b, True)
         visible_cards = [card for card, visible in zip(self.cards, visibility) if visible]
         for card in self.cards:
             self.grid.removeWidget(card)
@@ -570,7 +590,9 @@ class FillPage(TaskPage):
 class DiffPage(TaskPage):
     def __init__(self) -> None:
         super().__init__("Reconciliation", "订单差异比对", "自动匹配所选目录中的上游、后台和重复支付文件。")
-        self.path_picker = PathPicker("directory", str(Path.cwd() / "workspace" / "diffOrders"))
+        self.path_picker = PathPicker(
+            "directory", str(workspace_directory() / "diffOrders")
+        )
         self.path_picker.edit.textChanged.connect(self.load_group_config)
         self.date_picker = DatePicker(date.today())
         self.platform_combo = QComboBox()
@@ -641,6 +663,107 @@ class FetchPage(TaskPage):
         )
 
 
+class AddCardsPage(TaskPage):
+    def __init__(self) -> None:
+        super().__init__("Workbook tools", "增卡", "选择工作簿并粘贴卡号，每行一个卡号。")
+        self.path_picker = PathPicker("file", file_filter="Excel (*.xlsx)")
+        self.cards_input = QPlainTextEdit()
+        self.cards_input.setMinimumHeight(170)
+        self.cards_input.setPlaceholderText("1234\n3121\n1341")
+        self.add_field("工作簿", self.path_picker, "处理前请关闭 Excel/WPS 中的目标文件。")
+        self.add_field("卡号", self.cards_input, "每行一个卡号；重复或已存在的卡号会自动跳过。")
+        self.run_button.clicked.connect(self.run)
+
+    def run(self) -> None:
+        if not load_license().allows(FEATURE_ADD_CARDS):
+            QMessageBox.warning(self, "功能未授权", "请先验证包含增卡权限的密钥。")
+            return
+        workbook = self.path_picker.path()
+        cards_text = self.cards_input.toPlainText()
+        self.start_task(
+            lambda log: run_add_cards_task(workbook, cards_text, log)
+        )
+
+
+class AddB2BPage(TaskPage):
+    def __init__(self) -> None:
+        super().__init__(
+            "Workbook tools",
+            "提取B2B",
+            "粘贴多行 B2B 数据，确认自动识别的字段后写入提取B2B工作表。",
+        )
+        self.path_picker = PathPicker("file", file_filter="Excel (*.xlsx)")
+        self.data_input = QPlainTextEdit()
+        self.data_input.setMinimumHeight(120)
+        self.data_input.setPlaceholderText(
+            "2026-07-12 22:04:23 75NVDJEI 01635548053 01850801086 -50000"
+        )
+        self.date_time_combo = QComboBox()
+        self.trx_id_combo = QComboBox()
+        self.outgoing_card_combo = QComboBox()
+        self.amount_combo = QComboBox()
+        self.mapping_hint = QLabel("粘贴数据后自动识别第一行字段。")
+        self.mapping_hint.setObjectName("fieldHint")
+        self.add_field("工作簿", self.path_picker, "处理前请关闭 Excel/WPS 中的目标文件。")
+        self.add_field("B2B 数据", self.data_input, "每行一条；负金额会自动转为正数。")
+        self.add_field("日期时间字段", self.date_time_combo)
+        self.add_field("TRXID 字段", self.trx_id_combo)
+        self.add_field("转出卡号字段", self.outgoing_card_combo)
+        self.add_field("金额字段", self.amount_combo)
+        self.form.addWidget(self.mapping_hint)
+        self.data_input.textChanged.connect(self.refresh_mapping)
+        self.run_button.clicked.connect(self.run)
+
+    def refresh_mapping(self) -> None:
+        combos = (
+            self.date_time_combo,
+            self.trx_id_combo,
+            self.outgoing_card_combo,
+            self.amount_combo,
+        )
+        try:
+            fields = parse_input_text(self.data_input.toPlainText())[0].fields
+            defaults = guess_field_mapping(fields)
+        except ValueError as error:
+            for combo in combos:
+                combo.clear()
+            self.mapping_hint.setText(str(error))
+            return
+
+        default_indexes = (
+            defaults.date_time,
+            defaults.trx_id,
+            defaults.outgoing_card,
+            defaults.amount,
+        )
+        for combo, default_index in zip(combos, default_indexes):
+            combo.clear()
+            for index, field in enumerate(fields):
+                combo.addItem(f"{index + 1}. {field.value}", index)
+            combo.setCurrentIndex(default_index)
+        self.mapping_hint.setText("已自动识别；如有需要，可手动调整字段。")
+
+    def run(self) -> None:
+        if not load_license().allows(FEATURE_ADD_B2B):
+            QMessageBox.warning(self, "功能未授权", "请先验证包含提取B2B权限的密钥。")
+            return
+        combos = (
+            self.date_time_combo,
+            self.trx_id_combo,
+            self.outgoing_card_combo,
+            self.amount_combo,
+        )
+        if any(combo.currentData() is None for combo in combos):
+            QMessageBox.warning(self, "字段未识别", "请先粘贴有效的 B2B 数据。")
+            return
+        mapping = FieldMapping(*(int(combo.currentData()) for combo in combos))
+        workbook = self.path_picker.path()
+        input_text = self.data_input.toPlainText()
+        self.start_task(
+            lambda log: run_add_b2b_task(workbook, input_text, mapping, log)
+        )
+
+
 class SettingSection(QFrame):
     def __init__(self, title: str, description: str) -> None:
         super().__init__()
@@ -696,7 +819,8 @@ class SettingsPage(QWidget):
         license_header.addStretch()
         license_header.addWidget(self.license_status)
         license_description = QLabel(
-            "验证成功后开放订单比对和订单下载；密钥仅保存在本机，不写入 config.ini。"
+            "验证成功后按许可证开放订单比对、订单下载、增卡和提取B2B；"
+            "密钥仅保存在本机，不写入 config.ini。"
         )
         license_description.setObjectName("fieldHint")
         self.license_input = QLineEdit()
@@ -740,8 +864,27 @@ class SettingsPage(QWidget):
         self.add_bool(fill_section, "运行前选择工作簿", "fill", "select_workbook")
         self.add_text(fill_section, "默认工作簿", "fill", "workbook", "可填写文件名或绝对路径")
 
-        diff_section = SettingSection("订单比对", "这里管理全局行为；具体平台算法在订单比对页配置。")
+        diff_section = SettingSection(
+            "订单比对",
+            "finerbit 费率填写百分值，例如填写 4 表示 4%，填写 2.3 表示 2.3%。",
+        )
         self.add_bool(diff_section, "完成后打开 HTML", "diff_orders", "auto_open_html")
+        self.add_decimal(
+            diff_section,
+            "Easypaisa 费率",
+            "diff_orders",
+            "easypaisa_rate_percent",
+            0,
+            100,
+        )
+        self.add_decimal(
+            diff_section,
+            "JazzCash 费率",
+            "diff_orders",
+            "jazzcash_rate_percent",
+            0,
+            100,
+        )
 
         fetch_section = SettingSection("订单下载", "接口与下载设置。登录凭据继续保存在 loginConf.ini。")
         self.add_text(fetch_section, "登录接口", "fetch_orders", "login_url")
@@ -801,12 +944,31 @@ class SettingsPage(QWidget):
         section_widget.add_setting(label, control)
         self.controls[(section, option)] = control
 
+    def add_decimal(
+        self,
+        section_widget: SettingSection,
+        label: str,
+        section: str,
+        option: str,
+        minimum: float,
+        maximum: float,
+    ) -> None:
+        control = QDoubleSpinBox()
+        control.setRange(minimum, maximum)
+        control.setDecimals(4)
+        control.setSingleStep(0.1)
+        control.setSuffix(" %")
+        section_widget.add_setting(label, control)
+        self.controls[(section, option)] = control
+
     def load_values(self) -> None:
         parser = read_ini(self.config_path)
         for (section, option), control in self.controls.items():
             value = parser.get(section, option, fallback="")
             if isinstance(control, QLineEdit):
                 control.setText(value)
+            elif isinstance(control, QDoubleSpinBox):
+                control.setValue(float(value or control.minimum()))
             elif isinstance(control, QSpinBox):
                 control.setValue(int(value or control.minimum()))
             elif isinstance(control, QCheckBox):
@@ -817,6 +979,8 @@ class SettingsPage(QWidget):
         for (section, option), control in self.controls.items():
             if isinstance(control, QLineEdit):
                 value = control.text().strip()
+            elif isinstance(control, QDoubleSpinBox):
+                value = f"{control.value():.4f}".rstrip("0").rstrip(".")
             elif isinstance(control, QSpinBox):
                 value = str(control.value())
             else:
@@ -834,7 +998,7 @@ class SettingsPage(QWidget):
         self.license_input.clear()
         self.refresh_license_status(info)
         self.license_changed.emit(info)
-        QMessageBox.information(self, "密钥验证成功", "订单功能已根据许可证权限开放。")
+        QMessageBox.information(self, "密钥验证成功", "付费功能已根据许可证权限开放。")
 
     def clear_license(self) -> None:
         remove_license()
@@ -857,6 +1021,10 @@ class SettingsPage(QWidget):
             feature_names.append("订单比对")
         if current.allows(FEATURE_FETCH_ORDERS):
             feature_names.append("订单下载")
+        if current.allows(FEATURE_ADD_CARDS):
+            feature_names.append("增卡")
+        if current.allows(FEATURE_ADD_B2B):
+            feature_names.append("提取B2B")
         expiration = (
             current.expires_at.strftime("%Y-%m-%d %H:%M UTC")
             if current.expires_at
@@ -877,7 +1045,7 @@ class Sidebar(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 26, 18, 20)
         layout.setSpacing(8)
-        brand = QLabel("AutoExcel")
+        brand = QLabel("SmartSheet Desk")
         brand.setObjectName("sidebarBrand")
         caption = QLabel("DESKTOP WORKSPACE")
         caption.setObjectName("sidebarCaption")
@@ -887,7 +1055,15 @@ class Sidebar(QFrame):
         section = QLabel("工作区")
         section.setObjectName("navSection")
         layout.addWidget(section)
-        labels = ["00   工作台", "01   Excel 填充", "02   订单比对", "03   订单下载", "04   配置管理"]
+        labels = [
+            "工作台",
+            "Excel 填充",
+            "订单比对",
+            "订单下载",
+            "增卡",
+            "提取B2B",
+            "配置管理",
+        ]
         self.buttons: list[QPushButton] = []
         for index, label in enumerate(labels):
             button = QPushButton(label)
@@ -906,15 +1082,23 @@ class Sidebar(QFrame):
         for button_index, button in enumerate(self.buttons):
             button.setChecked(button_index == index)
 
-    def set_feature_access(self, order_diff: bool, fetch_orders: bool) -> None:
+    def set_feature_access(
+        self,
+        order_diff: bool,
+        fetch_orders: bool,
+        add_cards: bool,
+        add_b2b: bool,
+    ) -> None:
         self.buttons[2].setVisible(order_diff)
         self.buttons[3].setVisible(fetch_orders)
+        self.buttons[4].setVisible(add_cards)
+        self.buttons[5].setVisible(add_b2b)
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("AutoExcel")
+        self.setWindowTitle("SmartSheet Desk")
         self.resize(1120, 760)
         self.setMinimumSize(940, 650)
         root = QWidget()
@@ -928,11 +1112,15 @@ class MainWindow(QMainWindow):
         self.fill_page = FillPage()
         self.diff_page = DiffPage()
         self.fetch_page = FetchPage()
+        self.add_cards_page = AddCardsPage()
+        self.add_b2b_page = AddB2BPage()
         self.settings_page = SettingsPage()
         self.pages.addWidget(self.home_page)
         self.pages.addWidget(self.fill_page)
         self.pages.addWidget(self.diff_page)
         self.pages.addWidget(self.fetch_page)
+        self.pages.addWidget(self.add_cards_page)
+        self.pages.addWidget(self.add_b2b_page)
         self.pages.addWidget(self.settings_page)
         layout.addWidget(self.sidebar)
         layout.addWidget(self.pages, 1)
@@ -946,13 +1134,17 @@ class MainWindow(QMainWindow):
         current_license = load_license()
         if current_license != self.license_info:
             self.apply_license(current_license)
-        if index == 2 and not self.license_info.allows(FEATURE_ORDER_DIFF):
-            return
-        if index == 3 and not self.license_info.allows(FEATURE_FETCH_ORDERS):
+        required_feature = {
+            2: FEATURE_ORDER_DIFF,
+            3: FEATURE_FETCH_ORDERS,
+            4: FEATURE_ADD_CARDS,
+            5: FEATURE_ADD_B2B,
+        }.get(index)
+        if required_feature and not self.license_info.allows(required_feature):
             return
         self.pages.setCurrentIndex(index)
         self.sidebar.select(index)
-        if index == 4:
+        if index == 6:
             self.settings_page.load_values()
             self.settings_page.refresh_license_status()
 
@@ -961,17 +1153,24 @@ class MainWindow(QMainWindow):
         self.license_info = info
         order_diff = info.allows(FEATURE_ORDER_DIFF)
         fetch_orders = info.allows(FEATURE_FETCH_ORDERS)
-        self.sidebar.set_feature_access(order_diff, fetch_orders)
-        self.home_page.set_feature_access(order_diff, fetch_orders)
-        if self.pages.currentIndex() == 2 and not order_diff:
-            self.show_page(0)
-        elif self.pages.currentIndex() == 3 and not fetch_orders:
+        add_cards = info.allows(FEATURE_ADD_CARDS)
+        add_b2b = info.allows(FEATURE_ADD_B2B)
+        self.sidebar.set_feature_access(order_diff, fetch_orders, add_cards, add_b2b)
+        self.home_page.set_feature_access(order_diff, fetch_orders, add_cards, add_b2b)
+        required_feature = {
+            2: FEATURE_ORDER_DIFF,
+            3: FEATURE_FETCH_ORDERS,
+            4: FEATURE_ADD_CARDS,
+            5: FEATURE_ADD_B2B,
+        }.get(self.pages.currentIndex())
+        if required_feature and not info.allows(required_feature):
             self.show_page(0)
 
 
 def main() -> None:
+    ensure_workspace_directories()
     app = QApplication(sys.argv)
-    app.setApplicationName("AutoExcel")
+    app.setApplicationName("SmartSheet Desk")
     app.setStyle("Fusion")
     app.setStyleSheet(APP_STYLE)
     app.setFont(QFont("", 13))

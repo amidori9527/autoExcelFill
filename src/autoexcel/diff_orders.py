@@ -67,6 +67,8 @@ FINERBIT_UPSTREAM_FILE_PREFIX = "Transaction Details"
 EASYPISA_UPSTREAM_FILE_PREFIX = "TransactionHistoryRecords"
 BACKEND_FILE_PREFIX = "收款订单"
 DUPLICATE_PAYMENT_FILE_KEYWORD = "重复支付订单"
+DEFAULT_EASYPAISA_RATE_PERCENT = Decimal("4")
+DEFAULT_JAZZCASH_RATE_PERCENT = Decimal("2.3")
 
 
 @dataclass(frozen=True)
@@ -509,6 +511,39 @@ def should_auto_open_html(config: configparser.SectionProxy) -> bool:
     return parse_bool(config.get("auto_open_html", "true"), "diff_orders.auto_open_html")
 
 
+def _configured_percentage_rate(
+    config: configparser.SectionProxy,
+    option: str,
+    default: Decimal,
+) -> Decimal:
+    raw_value = config.get(option, str(default)).strip() or str(default)
+    try:
+        percentage = Decimal(raw_value)
+    except InvalidOperation as error:
+        raise ValueError(
+            f"config.ini 中 diff_orders.{option} 必须是百分数值"
+        ) from error
+    if not percentage.is_finite() or percentage < 0:
+        raise ValueError(f"config.ini 中 diff_orders.{option} 必须大于或等于 0")
+    return percentage / Decimal("100")
+
+
+def load_finerbit_fee_rates() -> tuple[Decimal, Decimal]:
+    config = load_diff_config()
+    return (
+        _configured_percentage_rate(
+            config,
+            "easypaisa_rate_percent",
+            DEFAULT_EASYPAISA_RATE_PERCENT,
+        ),
+        _configured_percentage_rate(
+            config,
+            "jazzcash_rate_percent",
+            DEFAULT_JAZZCASH_RATE_PERCENT,
+        ),
+    )
+
+
 def choose_diff_jobs_interactive() -> list[DiffJob]:
     if not sys.stdin.isatty():
         raise RuntimeError("交互模式需要可输入的终端；或请使用 --target-date/--a/--b 参数直接运行。")
@@ -760,6 +795,7 @@ def special_platform_label(mode: str) -> str:
 
 def read_job_diff_result(job: DiffJob, args: argparse.Namespace) -> JobDiffResult:
     if is_finerbit_job(job):
+        easypaisa_rate, jazzcash_rate = load_finerbit_fee_rates()
         a_entries = read_order_entries(
             job.upstream_path,
             id_col="B",
@@ -806,7 +842,13 @@ def read_job_diff_result(job: DiffJob, args: argparse.Namespace) -> JobDiffResul
             if job.duplicate_path
             else []
         )
-        result = diff_orders_with_duplicate_payments(a_entries, b_entries, duplicate_entries)
+        result = diff_orders_with_duplicate_payments(
+            a_entries,
+            b_entries,
+            duplicate_entries,
+            easypaisa_rate=easypaisa_rate,
+            jazzcash_rate=jazzcash_rate,
+        )
         return JobDiffResult(job=job, result=result)
 
     if is_easypaisa_job(job):
@@ -868,28 +910,47 @@ def read_job_diff_result(job: DiffJob, args: argparse.Namespace) -> JobDiffResul
     return JobDiffResult(job=job, result=diff_orders(a_entries, b_entries))
 
 
-def payment_rate(payment_method: str) -> Decimal:
+def payment_rate(
+    payment_method: str,
+    easypaisa_rate: Decimal = DEFAULT_EASYPAISA_RATE_PERCENT / Decimal("100"),
+    jazzcash_rate: Decimal = DEFAULT_JAZZCASH_RATE_PERCENT / Decimal("100"),
+) -> Decimal:
     normalized = payment_method.strip().lower()
     if "easypaisa" in normalized or "easy paisa" in normalized:
-        return Decimal("0.04")
+        return easypaisa_rate
     if "jazzcash" in normalized or "jazz cash" in normalized:
-        return Decimal("0.023")
+        return jazzcash_rate
     return Decimal("0")
 
 
-def calculated_fee_by_payment_method(entries: list[OrderEntry], amount_source: str) -> Decimal:
+def calculated_fee_by_payment_method(
+    entries: list[OrderEntry],
+    amount_source: str,
+    easypaisa_rate: Decimal = DEFAULT_EASYPAISA_RATE_PERCENT / Decimal("100"),
+    jazzcash_rate: Decimal = DEFAULT_JAZZCASH_RATE_PERCENT / Decimal("100"),
+) -> Decimal:
     total = Decimal("0")
     for entry in entries:
         base_amount = entry.fee if amount_source == "fee" else entry.amount
-        total += base_amount * payment_rate(entry.payment_method)
+        total += base_amount * payment_rate(
+            entry.payment_method, easypaisa_rate, jazzcash_rate
+        )
     return total
 
 
-def calculated_row_rounded_fee_by_payment_method(entries: list[OrderEntry], amount_source: str) -> Decimal:
+def calculated_row_rounded_fee_by_payment_method(
+    entries: list[OrderEntry],
+    amount_source: str,
+    easypaisa_rate: Decimal = DEFAULT_EASYPAISA_RATE_PERCENT / Decimal("100"),
+    jazzcash_rate: Decimal = DEFAULT_JAZZCASH_RATE_PERCENT / Decimal("100"),
+) -> Decimal:
     total = Decimal("0")
     for entry in entries:
         base_amount = entry.fee if amount_source == "fee" else entry.amount
-        total += (base_amount * payment_rate(entry.payment_method)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        total += (
+            base_amount
+            * payment_rate(entry.payment_method, easypaisa_rate, jazzcash_rate)
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return total
 
 
@@ -964,6 +1025,8 @@ def diff_orders_with_duplicate_payments(
     b_entries: list[OrderEntry],
     duplicate_entries: list[OrderEntry],
     special_mode: str = "finerbit",
+    easypaisa_rate: Decimal = DEFAULT_EASYPAISA_RATE_PERCENT / Decimal("100"),
+    jazzcash_rate: Decimal = DEFAULT_JAZZCASH_RATE_PERCENT / Decimal("100"),
 ) -> DiffResult:
     base_result = diff_orders(a_entries, b_entries)
     difference_entries = upstream_difference_entries(base_result)
@@ -974,8 +1037,12 @@ def diff_orders_with_duplicate_payments(
         a_fee = calculated_easypaisa_upstream_fee(a_entries)
         channel_cost = calculated_easypaisa_channel_cost(b_entries)
     else:
-        a_fee = calculated_fee_by_payment_method(a_entries, "amount")
-        channel_cost = calculated_row_rounded_fee_by_payment_method(a_entries, "amount")
+        a_fee = calculated_fee_by_payment_method(
+            a_entries, "amount", easypaisa_rate, jazzcash_rate
+        )
+        channel_cost = calculated_row_rounded_fee_by_payment_method(
+            a_entries, "amount", easypaisa_rate, jazzcash_rate
+        )
     return DiffResult(
         a_entries=base_result.a_entries,
         b_entries=base_result.b_entries,

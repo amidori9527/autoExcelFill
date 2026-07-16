@@ -21,7 +21,16 @@ FORMAT_VERSION = "AX1"
 PRODUCT = "autoexcel"
 FEATURE_ORDER_DIFF = "order_diff"
 FEATURE_FETCH_ORDERS = "fetch_orders"
-ALLOWED_FEATURES = frozenset({FEATURE_ORDER_DIFF, FEATURE_FETCH_ORDERS})
+FEATURE_ADD_CARDS = "add_cards"
+FEATURE_ADD_B2B = "add_b2b"
+ALLOWED_FEATURES = frozenset(
+    {
+        FEATURE_ORDER_DIFF,
+        FEATURE_FETCH_ORDERS,
+        FEATURE_ADD_CARDS,
+        FEATURE_ADD_B2B,
+    }
+)
 PUBLIC_KEY_BASE64 = "fFG48x7sCqxD8w_Q9K5wiNN37GXRpkK4HHHZhYKk30s"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

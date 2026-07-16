@@ -30,7 +30,7 @@ class LicenseTest(unittest.TestCase):
             "license_id": "license-001",
             "issued_at": (self.now - timedelta(minutes=1)).isoformat(),
             "expires_at": None,
-            "features": ["order_diff", "fetch_orders"],
+            "features": ["order_diff", "fetch_orders", "add_cards", "add_b2b"],
         }
         payload.update(overrides)
         return payload
@@ -39,7 +39,7 @@ class LicenseTest(unittest.TestCase):
         with patch.object(license_module, "PUBLIC_KEY_BASE64", self.public_key_base64):
             return license_module.validate_license(token, now=self.now)
 
-    def test_valid_permanent_license_opens_both_features(self) -> None:
+    def test_valid_permanent_license_opens_all_features(self) -> None:
         token = license_module.sign_license(self.payload(), self.private_key)
 
         info = self.validate(token)
@@ -47,6 +47,8 @@ class LicenseTest(unittest.TestCase):
         self.assertTrue(info.valid)
         self.assertTrue(info.allows("order_diff"))
         self.assertTrue(info.allows("fetch_orders"))
+        self.assertTrue(info.allows("add_cards"))
+        self.assertTrue(info.allows("add_b2b"))
         self.assertIsNone(info.expires_at)
 
     def test_tampered_payload_is_rejected(self) -> None:

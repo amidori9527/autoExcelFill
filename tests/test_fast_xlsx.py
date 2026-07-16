@@ -117,6 +117,31 @@ class IncomeSheetFastTest(unittest.TestCase):
             self.assertEqual(updated_b2b.tables["B2BTable"].ref, "A2:O5")
             self.assertTrue(updated_b2b["E7"].has_style)
 
+    def test_daily_balance_opening_balance_references_same_row_column_p(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            workbook_path = Path(temporary_directory) / "daily-balance.xlsx"
+            workbook = Workbook()
+            daily_balance = workbook.active
+            daily_balance.title = "每日余额监测"
+            daily_balance.append(["日期", *[f"字段{index}" for index in range(2, 17)]])
+            daily_balance.append([date(2026, 7, 7), *([1] * 15)])
+            daily_balance.append(["汇总", *([None] * 15)])
+            table = Table(displayName="DailyBalanceTable", ref="A1:P3")
+            table.totalsRowCount = 1
+            daily_balance.add_table(table)
+            workbook.save(workbook_path)
+
+            result = advance_summary_table_sheet_fast(
+                workbook_path,
+                "每日余额监测",
+                date(2026, 7, 8),
+                opening_balance_increment=True,
+            )
+
+            self.assertTrue(result.changed)
+            updated = load_workbook(workbook_path, data_only=False)["每日余额监测"]
+            self.assertEqual(updated["B3"].value, "=P3")
+
 
 if __name__ == "__main__":
     unittest.main()

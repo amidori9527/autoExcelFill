@@ -61,8 +61,8 @@ Build the desktop application on the current operating system:
 .venv/bin/pyinstaller -y autoexcel-gui.spec
 ```
 
-The macOS build is written to `dist/AutoExcel.app`. Windows produces the
-`dist/AutoExcel` application directory. Build separately on each operating
+The macOS build is written to `dist/SmartSheet Desk.app`. Windows produces the
+`dist/SmartSheet Desk` application directory. Build separately on each operating
 system; PyInstaller does not produce a Windows executable from macOS.
 
 ### Build the Windows toolkit
