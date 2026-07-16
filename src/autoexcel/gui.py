@@ -114,9 +114,9 @@ QFrame#licensePanel {
 QLabel#licenseValid { color: #067647; font-weight: 700; }
 QLabel#licenseInvalid { color: #b42318; font-weight: 700; }
 QFrame#homeCard:hover { border-color: #aebcf3; background: #fbfcff; }
-QLabel#cardNumber {
+QLabel#cardIcon {
     color: #2f5bea; background: #edf2ff; border-radius: 9px;
-    font-size: 15px; font-weight: 700; qproperty-alignment: AlignCenter;
+    font-size: 21px; font-weight: 700; qproperty-alignment: AlignCenter;
 }
 QPushButton {
     min-height: 34px; border-radius: 7px; padding: 0 14px;
@@ -164,6 +164,21 @@ class WorkerSignals(QObject):
     error = Signal(str)
     cancelled = Signal()
     finished = Signal()
+
+
+class NoWheelComboBox(QComboBox):
+    def wheelEvent(self, event) -> None:
+        event.ignore()
+
+
+class NoWheelSpinBox(QSpinBox):
+    def wheelEvent(self, event) -> None:
+        event.ignore()
+
+
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    def wheelEvent(self, event) -> None:
+        event.ignore()
 
 
 class TaskWorker(QRunnable):
@@ -319,7 +334,7 @@ class PageHeader(QWidget):
 class HomeCard(QFrame):
     clicked = Signal()
 
-    def __init__(self, number: str, title: str, description: str, accent: str) -> None:
+    def __init__(self, icon: str, title: str, description: str, accent: str) -> None:
         super().__init__()
         self.setObjectName("homeCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -328,13 +343,13 @@ class HomeCard(QFrame):
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(10)
         top = QHBoxLayout()
-        number_label = QLabel(number)
-        number_label.setObjectName("cardNumber")
-        number_label.setFixedSize(38, 34)
+        icon_label = QLabel(icon)
+        icon_label.setObjectName("cardIcon")
+        icon_label.setFixedSize(38, 34)
         badge = QLabel(accent)
         badge.setObjectName("statusPill")
         badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        top.addWidget(number_label)
+        top.addWidget(icon_label)
         top.addStretch()
         top.addWidget(badge)
         title_label = QLabel(title)
@@ -376,12 +391,12 @@ class HomePage(QWidget):
         self.grid.setHorizontalSpacing(16)
         self.grid.setVerticalSpacing(16)
         self.cards = [
-            HomeCard("01", "Excel 日期填充", "批量处理带颜色标签的工作表。", "本地处理"),
-            HomeCard("02", "订单差异比对", "自动匹配订单文件并生成 HTML 汇总。", "生成报告"),
-            HomeCard("03", "订单报表下载", "登录后台并下载指定日期的订单报表。", "需要网络"),
-            HomeCard("04", "增卡", "根据模板批量创建卡号工作表。", "付费功能"),
-            HomeCard("05", "提取B2B", "批量提取并写入 B2B 交易数据。", "付费功能"),
-            HomeCard("06", "配置管理", "可视化维护全局配置和功能参数。", "INI 配置"),
+            HomeCard("▦", "Excel 增行", "批量处理带颜色标签的工作表。", "本地处理"),
+            HomeCard("⇄", "订单差异比对", "自动匹配订单文件并生成 HTML 汇总。", "生成报告"),
+            HomeCard("⇩", "订单报表下载", "登录后台并下载指定日期的订单报表。", "需要网络"),
+            HomeCard("⊞", "增卡", "根据模板批量创建卡号工作表。", "付费功能"),
+            HomeCard("⇥", "提取B2B", "批量提取并写入 B2B 交易数据。", "付费功能"),
+            HomeCard("⚙", "配置管理", "可视化维护全局配置和功能参数。", "INI 配置"),
         ]
         for index, card in enumerate(self.cards):
             card.clicked.connect(lambda checked=False, page=index + 1: self.page_requested.emit(page))
@@ -620,7 +635,7 @@ class PathPicker(QWidget):
 
 class FillPage(TaskPage):
     def __init__(self) -> None:
-        super().__init__("Local workbook", "Excel 日期填充", "选择工作簿和目标日期，处理过程完全在本机完成。")
+        super().__init__("Local workbook", "Excel 增行", "选择工作簿和目标日期，处理过程完全在本机完成。")
         self.path_picker = PathPicker("file", file_filter="Excel (*.xlsx)")
         self.date_picker = DatePicker(default_target_date())
         self.add_field("工作簿", self.path_picker, "处理前请关闭 Excel/WPS 中正在打开的目标文件。")
@@ -646,7 +661,7 @@ class DiffPage(TaskPage):
             "订单差异比对",
             "支持按订单目录自动匹配，或手动选择一组订单 Excel。",
         )
-        self.mode_combo = QComboBox()
+        self.mode_combo = NoWheelComboBox()
         self.mode_combo.addItem("按订单目录处理", "directory")
         self.mode_combo.addItem("手动上传 Excel", "files")
 
@@ -660,7 +675,7 @@ class DiffPage(TaskPage):
         )
         self.path_picker.edit.textChanged.connect(self.load_group_config)
         self.date_picker = DatePicker(date.today())
-        self.platform_combo = QComboBox()
+        self.platform_combo = NoWheelComboBox()
         self.platform_combo.addItem("自动 / 默认算法", "")
         self.platform_combo.addItem("finerBit", "finerbit")
         self.platform_combo.addItem("EasyPaisa", "easypaisa")
@@ -695,7 +710,7 @@ class DiffPage(TaskPage):
         self.upstream_picker = PathPicker("file", file_filter="Excel (*.xlsx)")
         self.backend_picker = PathPicker("file", file_filter="Excel (*.xlsx)")
         self.duplicate_picker = PathPicker("file", file_filter="Excel (*.xlsx)")
-        self.manual_platform_combo = QComboBox()
+        self.manual_platform_combo = NoWheelComboBox()
         self.manual_platform_combo.addItem("自动 / 默认算法", "")
         self.manual_platform_combo.addItem("finerBit", "finerbit")
         self.manual_platform_combo.addItem("EasyPaisa", "easypaisa")
@@ -844,10 +859,10 @@ class AddB2BPage(TaskPage):
         self.data_input.setPlaceholderText(
             "2026-07-12 22:04:23 75NVDJEI 01635548053 01850801086 -50000"
         )
-        self.date_time_combo = QComboBox()
-        self.trx_id_combo = QComboBox()
-        self.outgoing_card_combo = QComboBox()
-        self.amount_combo = QComboBox()
+        self.date_time_combo = NoWheelComboBox()
+        self.trx_id_combo = NoWheelComboBox()
+        self.outgoing_card_combo = NoWheelComboBox()
+        self.amount_combo = NoWheelComboBox()
         self.mapping_hint = QLabel("粘贴数据后自动识别第一行字段。")
         self.mapping_hint.setObjectName("fieldHint")
         self.add_field("工作簿", self.path_picker, "处理前请关闭 Excel/WPS 中的目标文件。")
@@ -1001,7 +1016,7 @@ class SettingsPage(QWidget):
         content_layout.setContentsMargins(0, 0, 8, 0)
         content_layout.setSpacing(14)
 
-        fill_section = SettingSection("Excel 填充", "控制批处理方式和默认工作簿。")
+        fill_section = SettingSection("Excel 增行", "控制批处理方式和默认工作簿。")
         self.add_text(fill_section, "目标日期", "fill", "target_date", "留空时使用前一天")
         self.add_number(fill_section, "每批工作表数量", "fill", "limit_sheets", 1, 500)
         self.add_bool(fill_section, "仅处理彩色标签", "fill", "colored_sheets")
@@ -1077,7 +1092,7 @@ class SettingsPage(QWidget):
         minimum: int,
         maximum: int,
     ) -> None:
-        control = QSpinBox()
+        control = NoWheelSpinBox()
         control.setRange(minimum, maximum)
         control.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.PlusMinus)
         section_widget.add_setting(label, control)
@@ -1099,7 +1114,7 @@ class SettingsPage(QWidget):
         minimum: float,
         maximum: float,
     ) -> None:
-        control = QDoubleSpinBox()
+        control = NoWheelDoubleSpinBox()
         control.setRange(minimum, maximum)
         control.setDecimals(4)
         control.setSingleStep(0.1)
@@ -1203,7 +1218,7 @@ class Sidebar(QFrame):
         layout.addWidget(section)
         labels = [
             "工作台",
-            "Excel 填充",
+            "Excel 增行",
             "订单比对",
             "订单下载",
             "增卡",

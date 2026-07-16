@@ -128,7 +128,7 @@ def run_fill_task(
         f"完成 {summary.batch_count} 个批次，修改 {summary.changed_count} 个工作表，"
         f"跳过 {summary.skipped_count} 个工作表。"
     )
-    return TaskResult("Excel 填充完成", summary_text, workbook)
+    return TaskResult("Excel 增行完成", summary_text, workbook)
 
 
 def _jobs_from_directory(directory: Path, target_date: date) -> list[diff_orders.DiffJob]:

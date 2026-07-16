@@ -60,7 +60,7 @@ class GuiTasksTest(unittest.TestCase):
                 )
 
             updated = load_workbook(workbook_path, data_only=False)
-            self.assertEqual(result.title, "Excel 填充完成")
+            self.assertEqual(result.title, "Excel 增行完成")
             self.assertEqual(updated["Merchant A"]["A2"].value.date(), date(2026, 7, 14))
 
     def test_fill_task_updates_b2b_and_income_after_colored_sheets(self) -> None:
