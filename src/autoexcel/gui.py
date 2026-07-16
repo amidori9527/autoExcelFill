@@ -48,6 +48,7 @@ from autoexcel.gui_tasks import (
     TaskResult,
     run_add_b2b_task,
     run_add_cards_task,
+    run_diff_files_task,
     run_diff_task,
     run_fetch_task,
     run_fill_task,
@@ -65,6 +66,7 @@ from autoexcel.license import (
 )
 from autoexcel.main import default_target_date
 from autoexcel.runtime_paths import ensure_workspace_directories, workspace_directory
+from autoexcel.version import VERSION
 
 
 APP_STYLE = """
@@ -589,7 +591,20 @@ class FillPage(TaskPage):
 
 class DiffPage(TaskPage):
     def __init__(self) -> None:
-        super().__init__("Reconciliation", "订单差异比对", "自动匹配所选目录中的上游、后台和重复支付文件。")
+        super().__init__(
+            "Reconciliation",
+            "订单差异比对",
+            "支持按订单目录自动匹配，或手动选择一组订单 Excel。",
+        )
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("按订单目录处理", "directory")
+        self.mode_combo.addItem("手动上传 Excel", "files")
+
+        self.mode_stack = QStackedWidget()
+        directory_panel = QWidget()
+        directory_layout = QVBoxLayout(directory_panel)
+        directory_layout.setContentsMargins(0, 0, 0, 0)
+        directory_layout.setSpacing(14)
         self.path_picker = PathPicker(
             "directory", str(workspace_directory() / "diffOrders")
         )
@@ -607,9 +622,59 @@ class DiffPage(TaskPage):
         platform_layout.setSpacing(7)
         platform_layout.addWidget(self.platform_combo, 1)
         platform_layout.addWidget(save_group_button)
-        self.add_field("订单目录", self.path_picker, "目录可以是 diffOrders，也可以是包含 conf.ini 的具体分组目录。")
-        self.add_field("订单日期", self.date_picker)
-        self.add_field("分组算法（conf.ini）", platform_row, "保存到所选目录的 conf.ini；留空时沿用程序默认判断。")
+        directory_layout.addWidget(
+            FieldBlock(
+                "订单目录",
+                self.path_picker,
+                "目录可以是 diffOrders，也可以是包含 conf.ini 的具体分组目录。",
+            )
+        )
+        directory_layout.addWidget(FieldBlock("订单日期", self.date_picker))
+        directory_layout.addWidget(
+            FieldBlock(
+                "分组算法（conf.ini）",
+                platform_row,
+                "保存到所选目录的 conf.ini；留空时沿用程序默认判断。",
+            )
+        )
+
+        manual_panel = QWidget()
+        manual_layout = QVBoxLayout(manual_panel)
+        manual_layout.setContentsMargins(0, 0, 0, 0)
+        manual_layout.setSpacing(14)
+        self.upstream_picker = PathPicker("file", file_filter="Excel (*.xlsx)")
+        self.backend_picker = PathPicker("file", file_filter="Excel (*.xlsx)")
+        self.duplicate_picker = PathPicker("file", file_filter="Excel (*.xlsx)")
+        self.manual_platform_combo = QComboBox()
+        self.manual_platform_combo.addItem("自动 / 默认算法", "")
+        self.manual_platform_combo.addItem("finerBit", "finerbit")
+        self.manual_platform_combo.addItem("EasyPaisa", "easypaisa")
+        manual_layout.addWidget(
+            FieldBlock("上游 Excel（必传）", self.upstream_picker)
+        )
+        manual_layout.addWidget(
+            FieldBlock("平台收款订单 Excel（必传）", self.backend_picker)
+        )
+        manual_layout.addWidget(
+            FieldBlock(
+                "代收重复支付订单（选传）",
+                self.duplicate_picker,
+                "没有重复支付订单时保持为空。",
+            )
+        )
+        manual_layout.addWidget(
+            FieldBlock(
+                "分组算法",
+                self.manual_platform_combo,
+                "自动模式根据文件名和重复支付文件判断；也可以手动指定算法。",
+            )
+        )
+
+        self.mode_stack.addWidget(directory_panel)
+        self.mode_stack.addWidget(manual_panel)
+        self.add_field("处理方式", self.mode_combo)
+        self.form.addWidget(self.mode_stack)
+        self.mode_combo.currentIndexChanged.connect(self.mode_stack.setCurrentIndex)
         self.run_button.clicked.connect(self.run)
         self.load_group_config()
 
@@ -617,7 +682,37 @@ class DiffPage(TaskPage):
         if not load_license().allows(FEATURE_ORDER_DIFF):
             QMessageBox.warning(self, "功能未授权", "请先在配置管理中验证包含订单比对权限的密钥。")
             return
-        self.start_task(lambda log: run_diff_task(self.path_picker.path(), self.date_picker.value(), log))
+        if self.mode_combo.currentData() == "directory":
+            self.start_task(
+                lambda log: run_diff_task(
+                    self.path_picker.path(), self.date_picker.value(), log
+                )
+            )
+            return
+
+        upstream_text = self.upstream_picker.edit.text().strip()
+        backend_text = self.backend_picker.edit.text().strip()
+        if not upstream_text or not backend_text:
+            QMessageBox.warning(
+                self,
+                "文件未选择",
+                "请选择上游 Excel 和平台收款订单 Excel。",
+            )
+            return
+        duplicate_text = self.duplicate_picker.edit.text().strip()
+        upstream_path = Path(upstream_text).expanduser()
+        backend_path = Path(backend_text).expanduser()
+        duplicate_path = Path(duplicate_text).expanduser() if duplicate_text else None
+        platform_mode = str(self.manual_platform_combo.currentData())
+        self.start_task(
+            lambda log: run_diff_files_task(
+                upstream_path,
+                backend_path,
+                duplicate_path,
+                platform_mode,
+                log,
+            )
+        )
 
     def load_group_config(self) -> None:
         config_path = self.path_picker.path() / "conf.ini"
@@ -1073,7 +1168,7 @@ class Sidebar(QFrame):
             layout.addWidget(button)
             self.buttons.append(button)
         layout.addStretch()
-        footer = QLabel("本地优先 · 配置可控")
+        footer = QLabel(f"Version {VERSION}")
         footer.setObjectName("sidebarCaption")
         layout.addWidget(footer)
         self.select(0)

@@ -161,6 +161,46 @@ def _jobs_from_directory(directory: Path, target_date: date) -> list[diff_orders
 
 def run_diff_task(directory: Path, target_date: date, log: LogCallback) -> TaskResult:
     jobs = _jobs_from_directory(directory, target_date)
+    return _run_diff_jobs(jobs, log)
+
+
+def run_diff_files_task(
+    upstream_path: Path,
+    backend_path: Path,
+    duplicate_path: Path | None,
+    platform_mode: str,
+    log: LogCallback,
+) -> TaskResult:
+    required_files = (
+        ("上游 Excel", upstream_path),
+        ("平台收款订单 Excel", backend_path),
+    )
+    for label, path in required_files:
+        if not path.is_file():
+            raise FileNotFoundError(f"{label} 不存在：{path}")
+        if path.suffix.lower() != ".xlsx":
+            raise ValueError(f"{label} 必须是 .xlsx 文件")
+    if duplicate_path is not None:
+        if not duplicate_path.is_file():
+            raise FileNotFoundError(f"代收重复支付订单 Excel 不存在：{duplicate_path}")
+        if duplicate_path.suffix.lower() != ".xlsx":
+            raise ValueError("代收重复支付订单必须是 .xlsx 文件")
+
+    resolved_mode = platform_mode or diff_orders.platform_mode_for_pair(
+        upstream_path, backend_path, duplicate_path
+    )
+    job = diff_orders.DiffJob(
+        upstream_path=upstream_path,
+        backend_path=backend_path,
+        duplicate_path=duplicate_path,
+        platform_mode=resolved_mode,
+    )
+    return _run_diff_jobs([job], log)
+
+
+def _run_diff_jobs(
+    jobs: list[diff_orders.DiffJob], log: LogCallback
+) -> TaskResult:
     log(f"已匹配 {len(jobs)} 组订单文件")
     args = argparse.Namespace(a_col="L", b_col="D")
     results: list[diff_orders.JobDiffResult] = []
