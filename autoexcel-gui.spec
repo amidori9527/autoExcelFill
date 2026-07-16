@@ -9,6 +9,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ("template/order_diff.html", "template"),
+        ("icon/cover.png", "icon"),
         ("config.ini", "."),
         ("loginConf.example.ini", "."),
         ("VERSION.txt", "."),
@@ -38,6 +39,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon="icon/cover.ico" if sys.platform == "win32" else None,
 )
 coll = COLLECT(
     exe,

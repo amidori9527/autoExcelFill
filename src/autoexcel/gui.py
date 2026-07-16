@@ -8,7 +8,7 @@ from threading import Event
 from typing import Callable
 
 from PySide6.QtCore import QDate, QLocale, QObject, QRunnable, QThreadPool, Qt, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QFont
+from PySide6.QtGui import QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QMainWindow,
     QMessageBox,
@@ -65,7 +66,11 @@ from autoexcel.license import (
     remove_license,
 )
 from autoexcel.main import default_target_date
-from autoexcel.runtime_paths import ensure_workspace_directories, workspace_directory
+from autoexcel.runtime_paths import (
+    bundled_resource,
+    ensure_workspace_directories,
+    workspace_directory,
+)
 from autoexcel.version import VERSION
 
 
@@ -418,7 +423,13 @@ class FieldBlock(QWidget):
 
 
 class TaskPage(QWidget):
-    def __init__(self, eyebrow: str, title: str, description: str) -> None:
+    def __init__(
+        self,
+        eyebrow: str,
+        title: str,
+        description: str,
+        scroll_form: bool = False,
+    ) -> None:
         super().__init__()
         self.worker: TaskWorker | None = None
         self.output_path: Path | None = None
@@ -432,7 +443,17 @@ class TaskPage(QWidget):
         self.form = QVBoxLayout(self.form_panel)
         self.form.setContentsMargins(22, 20, 22, 20)
         self.form.setSpacing(14)
-        outer.addWidget(self.form_panel)
+        if scroll_form:
+            self.form.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+            form_scroll = QScrollArea()
+            form_scroll.setWidgetResizable(True)
+            form_scroll.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            )
+            form_scroll.setWidget(self.form_panel)
+            outer.addWidget(form_scroll, 1)
+        else:
+            outer.addWidget(self.form_panel)
 
         actions = QHBoxLayout()
         actions.setSpacing(9)
@@ -545,11 +566,16 @@ class PathPicker(QWidget):
         super().__init__()
         self.mode = mode
         self.file_filter = file_filter
+        self.setAcceptDrops(mode == "file")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(7)
         self.edit = QLineEdit(initial)
-        self.edit.setPlaceholderText("请选择路径")
+        self.edit.setPlaceholderText(
+            "可点击浏览或拖入 .xlsx 文件" if mode == "file" else "请选择路径"
+        )
+        if mode == "file":
+            self.edit.setAcceptDrops(False)
         button = QPushButton("浏览…")
         button.clicked.connect(self.choose)
         layout.addWidget(self.edit, 1)
@@ -566,6 +592,30 @@ class PathPicker(QWidget):
             selected, _ = QFileDialog.getOpenFileName(self, "选择文件", start, self.file_filter)
         if selected:
             self.edit.setText(selected)
+
+    def dragEnterEvent(self, event) -> None:
+        if self.mode == "file" and event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event) -> None:
+        paths = [
+            Path(url.toLocalFile())
+            for url in event.mimeData().urls()
+            if url.isLocalFile()
+        ]
+        if len(paths) != 1:
+            QMessageBox.warning(self, "无法添加文件", "请一次拖入一个 .xlsx 文件。")
+            event.ignore()
+            return
+        path = paths[0]
+        if not path.is_file() or path.suffix.lower() != ".xlsx":
+            QMessageBox.warning(self, "文件格式不支持", "请拖入有效的 .xlsx 文件。")
+            event.ignore()
+            return
+        self.edit.setText(str(path))
+        event.acceptProposedAction()
 
 
 class FillPage(TaskPage):
@@ -786,10 +836,11 @@ class AddB2BPage(TaskPage):
             "Workbook tools",
             "提取B2B",
             "粘贴多行 B2B 数据，确认自动识别的字段后写入提取B2B工作表。",
+            scroll_form=True,
         )
         self.path_picker = PathPicker("file", file_filter="Excel (*.xlsx)")
         self.data_input = QPlainTextEdit()
-        self.data_input.setMinimumHeight(120)
+        self.data_input.setMinimumHeight(100)
         self.data_input.setPlaceholderText(
             "2026-07-12 22:04:23 75NVDJEI 01635548053 01850801086 -50000"
         )
@@ -1266,6 +1317,11 @@ def main() -> None:
     ensure_workspace_directories()
     app = QApplication(sys.argv)
     app.setApplicationName("SmartSheet Desk")
+    icon_path = bundled_resource("icon/cover.png")
+    if icon_path is None:
+        icon_path = Path(__file__).resolve().parents[2] / "icon" / "cover.png"
+    if icon_path.is_file():
+        app.setWindowIcon(QIcon(str(icon_path)))
     app.setStyle("Fusion")
     app.setStyleSheet(APP_STYLE)
     app.setFont(QFont("", 13))

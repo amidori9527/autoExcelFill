@@ -10,10 +10,6 @@ import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 
-if sys.platform != "win32":
-    import termios
-    import tty
-
 from openpyxl.utils.cell import get_column_letter, range_boundaries
 
 from autoexcel.fast_xlsx import (
@@ -166,68 +162,18 @@ def parse_card_numbers(text: str) -> list[str]:
     return [card.strip() for card in text.splitlines() if card.strip()]
 
 
-def _read_card_numbers_windows() -> list[str]:
-    print("请粘贴多行卡号；粘贴完成后，在空白行再按一次 Enter 提交。")
-    print("示例：1234、3121、1341 每个卡号一行；Ctrl+C 取消。")
-    lines: list[str] = []
-    while True:
-        line = input("卡号：" if not lines else "").strip()
-        if not line:
-            return lines
-        lines.append(line)
-
-
-def _read_card_numbers_posix() -> list[str]:
-    """Read a bracketed multiline paste, then submit on the next Enter key."""
-    file_descriptor = sys.stdin.fileno()
-    previous_settings = termios.tcgetattr(file_descriptor)
-    pasted = bytearray()
-    in_paste = False
-    print("请直接粘贴多行卡号；粘贴完成后，再按一次 Enter 提交。")
-    print("示例：1234、3121、1341 每个卡号一行；Ctrl+C 取消。")
-    sys.stdout.write("卡号：")
-    sys.stdout.flush()
-    try:
-        sys.stdout.write("\x1b[?2004h")
-        sys.stdout.flush()
-        tty.setcbreak(file_descriptor)
-        while True:
-            character = os.read(file_descriptor, 1)
-            if character == b"\x03":
-                raise KeyboardInterrupt
-            if character == b"\x04":
-                return []
-            if character == b"\x1b":
-                sequence = character + os.read(file_descriptor, 5)
-                if sequence == b"\x1b[200~":
-                    in_paste = True
-                    continue
-                if sequence == b"\x1b[201~":
-                    in_paste = False
-                    sys.stdout.write("\n粘贴完成，按 Enter 提交。")
-                    sys.stdout.flush()
-                    continue
-                pasted.extend(sequence)
-                continue
-            if not in_paste and character in (b"\r", b"\n"):
-                sys.stdout.write("\n")
-                return parse_card_numbers(pasted.decode("utf-8", errors="replace"))
-            pasted.extend(character)
-            if in_paste:
-                sys.stdout.write("\n" if character in (b"\r", b"\n") else character.decode("utf-8", errors="replace"))
-                sys.stdout.flush()
-    finally:
-        termios.tcsetattr(file_descriptor, termios.TCSADRAIN, previous_settings)
-        sys.stdout.write("\x1b[?2004l")
-        sys.stdout.flush()
-
-
 def read_card_numbers_from_terminal() -> list[str]:
     if not sys.stdin.isatty():
         raise RuntimeError("增卡需要在可输入的终端中运行。")
-    if sys.platform == "win32":
-        return _read_card_numbers_windows()
-    return _read_card_numbers_posix()
+
+    print("请粘贴多行卡号；粘贴完成后，在空白行按 Enter 提交。")
+    print("示例：1234、3121、1341 每个卡号一行。")
+    rows: list[str] = []
+    while True:
+        raw = input("卡号：" if not rows else "")
+        if not raw.strip():
+            return parse_card_numbers("\n".join(rows))
+        rows.append(raw)
 
 
 def add_cards_to_workbook(xlsx_path: Path, card_numbers: list[str]) -> AddCardsResult:
