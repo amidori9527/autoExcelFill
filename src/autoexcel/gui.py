@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 import sys
 import traceback
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from threading import Event
 from typing import Callable
@@ -10,6 +11,7 @@ from typing import Callable
 from PySide6.QtCore import QDate, QLocale, QObject, QRunnable, QThreadPool, Qt, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QAbstractSpinBox,
     QApplication,
     QCalendarWidget,
@@ -20,6 +22,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGridLayout,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -33,6 +36,8 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -44,6 +49,7 @@ from autoexcel.config_editor import (
     read_ini,
     update_ini,
 )
+from autoexcel.diff_orders import get_result_dir
 from autoexcel.fetch_orders import get_login_config_path
 from autoexcel.gui_tasks import (
     TaskResult,
@@ -53,6 +59,8 @@ from autoexcel.gui_tasks import (
     run_diff_task,
     run_fetch_task,
     run_fill_task,
+    run_payout_diff_files_task,
+    run_payout_diff_task,
 )
 from autoexcel.license import (
     FEATURE_ADD_B2B,
@@ -392,10 +400,11 @@ class HomePage(QWidget):
         self.grid.setVerticalSpacing(16)
         self.cards = [
             HomeCard("▦", "Excel 增行", "批量处理带颜色标签的工作表。", "本地处理"),
-            HomeCard("⇄", "订单差异比对", "自动匹配订单文件并生成 HTML 汇总。", "生成报告"),
+            HomeCard("⇄", "订单差异比对", "分别执行代收与代付对账并生成 HTML 汇总。", "生成报告"),
             HomeCard("⇩", "订单报表下载", "登录后台并下载指定日期的订单报表。", "需要网络"),
             HomeCard("⊞", "增卡", "根据模板批量创建卡号工作表。", "付费功能"),
             HomeCard("⇥", "提取B2B", "批量提取并写入 B2B 交易数据。", "付费功能"),
+            HomeCard("⌕", "对账结果", "按生成日期查看代收与代付对账报告。", "历史记录"),
             HomeCard("⚙", "配置管理", "可视化维护全局配置和功能参数。", "INI 配置"),
         ]
         for index, card in enumerate(self.cards):
@@ -411,7 +420,7 @@ class HomePage(QWidget):
         add_cards: bool,
         add_b2b: bool,
     ) -> None:
-        visibility = (True, order_diff, fetch_orders, add_cards, add_b2b, True)
+        visibility = (True, order_diff, fetch_orders, add_cards, add_b2b, order_diff, True)
         visible_cards = [card for card, visible in zip(self.cards, visibility) if visible]
         for card in self.cards:
             self.grid.removeWidget(card)
@@ -577,17 +586,27 @@ class TaskPage(QWidget):
 
 
 class PathPicker(QWidget):
-    def __init__(self, mode: str, initial: str = "", file_filter: str = "") -> None:
+    def __init__(
+        self,
+        mode: str,
+        initial: str = "",
+        file_filter: str = "",
+        allowed_suffixes: tuple[str, ...] = (".xlsx",),
+    ) -> None:
         super().__init__()
         self.mode = mode
         self.file_filter = file_filter
+        self.allowed_suffixes = tuple(suffix.lower() for suffix in allowed_suffixes)
         self.setAcceptDrops(mode == "file")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(7)
         self.edit = QLineEdit(initial)
+        suffix_hint = " / ".join(self.allowed_suffixes)
         self.edit.setPlaceholderText(
-            "可点击浏览或拖入 .xlsx 文件" if mode == "file" else "请选择路径"
+            f"可点击浏览或拖入 {suffix_hint} 文件"
+            if mode == "file"
+            else "请选择路径"
         )
         if mode == "file":
             self.edit.setAcceptDrops(False)
@@ -621,12 +640,15 @@ class PathPicker(QWidget):
             if url.isLocalFile()
         ]
         if len(paths) != 1:
-            QMessageBox.warning(self, "无法添加文件", "请一次拖入一个 .xlsx 文件。")
+            QMessageBox.warning(self, "无法添加文件", "请一次拖入一个文件。")
             event.ignore()
             return
         path = paths[0]
-        if not path.is_file() or path.suffix.lower() != ".xlsx":
-            QMessageBox.warning(self, "文件格式不支持", "请拖入有效的 .xlsx 文件。")
+        if not path.is_file() or path.suffix.lower() not in self.allowed_suffixes:
+            suffixes = " / ".join(self.allowed_suffixes)
+            QMessageBox.warning(
+                self, "文件格式不支持", f"请拖入有效的 {suffixes} 文件。"
+            )
             event.ignore()
             return
         self.edit.setText(str(path))
@@ -659,8 +681,19 @@ class DiffPage(TaskPage):
         super().__init__(
             "Reconciliation",
             "订单差异比对",
-            "支持按订单目录自动匹配，或手动选择一组订单 Excel。",
+            "分别执行代收或代付订单对账，两种业务使用独立规则。",
+            scroll_form=True,
         )
+        self.business_combo = NoWheelComboBox()
+        self.business_combo.addItem("代收订单比对", "collection")
+        self.business_combo.addItem("代付订单比对", "payout")
+
+        self.business_stack = QStackedWidget()
+        collection_panel = QWidget()
+        collection_layout = QVBoxLayout(collection_panel)
+        collection_layout.setContentsMargins(0, 0, 0, 0)
+        collection_layout.setSpacing(14)
+
         self.mode_combo = NoWheelComboBox()
         self.mode_combo.addItem("按订单目录处理", "directory")
         self.mode_combo.addItem("手动上传 Excel", "files")
@@ -737,15 +770,84 @@ class DiffPage(TaskPage):
 
         self.mode_stack.addWidget(directory_panel)
         self.mode_stack.addWidget(manual_panel)
-        self.add_field("处理方式", self.mode_combo)
-        self.form.addWidget(self.mode_stack)
+        collection_layout.addWidget(FieldBlock("处理方式", self.mode_combo))
+        collection_layout.addWidget(self.mode_stack)
         self.mode_combo.currentIndexChanged.connect(self.mode_stack.setCurrentIndex)
+
+        payout_panel = QWidget()
+        payout_layout = QVBoxLayout(payout_panel)
+        payout_layout.setContentsMargins(0, 0, 0, 0)
+        payout_layout.setSpacing(14)
+        self.payout_mode_combo = NoWheelComboBox()
+        self.payout_mode_combo.addItem("按订单目录处理", "directory")
+        self.payout_mode_combo.addItem("手动上传账单", "files")
+        self.payout_mode_stack = QStackedWidget()
+
+        payout_directory_panel = QWidget()
+        payout_directory_layout = QVBoxLayout(payout_directory_panel)
+        payout_directory_layout.setContentsMargins(0, 0, 0, 0)
+        self.payout_path_picker = PathPicker(
+            "directory", str(workspace_directory() / "diffOrders")
+        )
+        payout_directory_layout.addWidget(
+            FieldBlock(
+                "代付订单目录",
+                self.payout_path_picker,
+                "按表头自动识别上游 .csv/.xlsx 和我方付款订单 .xlsx。",
+            )
+        )
+
+        payout_manual_panel = QWidget()
+        payout_manual_layout = QVBoxLayout(payout_manual_panel)
+        payout_manual_layout.setContentsMargins(0, 0, 0, 0)
+        payout_manual_layout.setSpacing(14)
+        self.payout_upstream_picker = PathPicker(
+            "file",
+            file_filter="上游账单 (*.csv *.xlsx)",
+            allowed_suffixes=(".csv", ".xlsx"),
+        )
+        self.payout_backend_picker = PathPicker(
+            "file", file_filter="Excel (*.xlsx)"
+        )
+        payout_manual_layout.addWidget(
+            FieldBlock(
+                "代付上游账单（必传）",
+                self.payout_upstream_picker,
+                "支持 .csv 或 .xlsx，需包含 TRANS_ID、TRX_STATUS、TRX_AMT、FEE、FED。",
+            )
+        )
+        payout_manual_layout.addWidget(
+            FieldBlock(
+                "我方付款订单（必传）",
+                self.payout_backend_picker,
+                "需包含 transactionId、交易状态、付款金额、手续费和支付方式名称。",
+            )
+        )
+
+        self.payout_mode_stack.addWidget(payout_directory_panel)
+        self.payout_mode_stack.addWidget(payout_manual_panel)
+        payout_layout.addWidget(FieldBlock("处理方式", self.payout_mode_combo))
+        payout_layout.addWidget(self.payout_mode_stack)
+        self.payout_mode_combo.currentIndexChanged.connect(
+            self.payout_mode_stack.setCurrentIndex
+        )
+
+        self.business_stack.addWidget(collection_panel)
+        self.business_stack.addWidget(payout_panel)
+        self.add_field("对账类型", self.business_combo)
+        self.form.addWidget(self.business_stack)
+        self.business_combo.currentIndexChanged.connect(
+            self.business_stack.setCurrentIndex
+        )
         self.run_button.clicked.connect(self.run)
         self.load_group_config()
 
     def run(self) -> None:
         if not load_license().allows(FEATURE_ORDER_DIFF):
             QMessageBox.warning(self, "功能未授权", "请先在配置管理中验证包含订单比对权限的密钥。")
+            return
+        if self.business_combo.currentData() == "payout":
+            self.run_payout()
             return
         if self.mode_combo.currentData() == "directory":
             self.start_task(
@@ -776,6 +878,32 @@ class DiffPage(TaskPage):
                 duplicate_path,
                 platform_mode,
                 log,
+            )
+        )
+
+    def run_payout(self) -> None:
+        if self.payout_mode_combo.currentData() == "directory":
+            self.start_task(
+                lambda log: run_payout_diff_task(
+                    self.payout_path_picker.path(), log
+                )
+            )
+            return
+
+        upstream_text = self.payout_upstream_picker.edit.text().strip()
+        backend_text = self.payout_backend_picker.edit.text().strip()
+        if not upstream_text or not backend_text:
+            QMessageBox.warning(
+                self,
+                "文件未选择",
+                "请选择代付上游账单和我方付款订单。",
+            )
+            return
+        upstream_path = Path(upstream_text).expanduser()
+        backend_path = Path(backend_text).expanduser()
+        self.start_task(
+            lambda log: run_payout_diff_files_task(
+                upstream_path, backend_path, log
             )
         )
 
@@ -923,6 +1051,134 @@ class AddB2BPage(TaskPage):
         self.start_task(
             lambda log: run_add_b2b_task(workbook, input_text, mapping, log)
         )
+
+
+class ResultsPage(QWidget):
+    RESULT_TIMESTAMP_PATTERN = re.compile(r"_(\d{8})_(\d{6})$")
+
+    def __init__(self) -> None:
+        super().__init__()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(40, 32, 40, 30)
+        outer.setSpacing(18)
+        outer.addWidget(
+            PageHeader(
+                "Reconciliation results",
+                "对账结果",
+                "按生成日期查看代收与代付订单比对结果。",
+            )
+        )
+
+        filter_panel = QFrame()
+        filter_panel.setObjectName("panel")
+        filter_layout = QHBoxLayout(filter_panel)
+        filter_layout.setContentsMargins(20, 16, 20, 16)
+        filter_layout.setSpacing(10)
+        filter_layout.addWidget(QLabel("生成日期"))
+        self.filter_combo = NoWheelComboBox()
+        self.filter_combo.addItems(["全部", "今天", "指定日期"])
+        self.filter_combo.setFixedWidth(130)
+        filter_layout.addWidget(self.filter_combo)
+        self.date_picker = DatePicker(date.today())
+        self.date_picker.setFixedWidth(280)
+        self.date_picker.setVisible(False)
+        filter_layout.addWidget(self.date_picker)
+        refresh_button = QPushButton("刷新")
+        refresh_button.clicked.connect(self.refresh_results)
+        filter_layout.addWidget(refresh_button)
+        filter_layout.addStretch()
+        self.count_label = QLabel()
+        self.count_label.setObjectName("muted")
+        filter_layout.addWidget(self.count_label)
+        outer.addWidget(filter_panel)
+
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["类型", "生成时间", "结果文件", "操作"])
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(44)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.cellDoubleClicked.connect(self.open_row)
+        outer.addWidget(self.table, 1)
+
+        self.filter_combo.currentIndexChanged.connect(self.filter_changed)
+        self.date_picker.date_changed.connect(lambda _value: self.refresh_results())
+        self.refresh_results()
+
+    def filter_changed(self, index: int) -> None:
+        self.date_picker.setVisible(index == 2)
+        self.refresh_results()
+
+    def result_entries(self) -> list[tuple[datetime, str, Path]]:
+        result_dir = get_result_dir()
+        if not result_dir.is_dir():
+            return []
+        entries: list[tuple[datetime, str, Path]] = []
+        for path in result_dir.glob("*.html"):
+            if path.name.startswith("payout_order_diff_"):
+                result_type = "代付"
+            elif path.name.startswith("order_diff_"):
+                result_type = "代收"
+            else:
+                continue
+            match = self.RESULT_TIMESTAMP_PATTERN.search(path.stem)
+            if match is None:
+                continue
+            generated_at = datetime.strptime("".join(match.groups()), "%Y%m%d%H%M%S")
+            entries.append((generated_at, result_type, path))
+        entries.sort(key=lambda entry: entry[0], reverse=True)
+        return entries
+
+    def selected_date(self) -> date | None:
+        if self.filter_combo.currentIndex() == 0:
+            return None
+        if self.filter_combo.currentIndex() == 1:
+            return date.today()
+        return self.date_picker.value()
+
+    def refresh_results(self) -> None:
+        selected_date = self.selected_date()
+        entries = [
+            entry
+            for entry in self.result_entries()
+            if selected_date is None or entry[0].date() == selected_date
+        ]
+        self.table.setRowCount(0)
+        for generated_at, result_type, path in entries:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            type_item = QTableWidgetItem(result_type)
+            type_item.setData(Qt.ItemDataRole.UserRole, str(path))
+            self.table.setItem(row, 0, type_item)
+            self.table.setItem(
+                row, 1, QTableWidgetItem(generated_at.strftime("%Y-%m-%d %H:%M:%S"))
+            )
+            self.table.setItem(row, 2, QTableWidgetItem(path.name))
+            open_button = QPushButton("打开")
+            open_button.clicked.connect(
+                lambda checked=False, target=path: self.open_path(target)
+            )
+            self.table.setCellWidget(row, 3, open_button)
+        self.count_label.setText(f"共 {len(entries)} 条")
+
+    def open_row(self, row: int, _column: int) -> None:
+        item = self.table.item(row, 0)
+        if item is not None:
+            self.open_path(Path(str(item.data(Qt.ItemDataRole.UserRole))))
+
+    def open_path(self, path: Path) -> None:
+        if not path.is_file():
+            QMessageBox.warning(self, "结果不存在", "该结果文件已被移动或删除。")
+            self.refresh_results()
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
 
 class SettingSection(QFrame):
@@ -1223,6 +1479,7 @@ class Sidebar(QFrame):
             "订单下载",
             "增卡",
             "提取B2B",
+            "对账结果",
             "配置管理",
         ]
         self.buttons: list[QPushButton] = []
@@ -1254,6 +1511,7 @@ class Sidebar(QFrame):
         self.buttons[3].setVisible(fetch_orders)
         self.buttons[4].setVisible(add_cards)
         self.buttons[5].setVisible(add_b2b)
+        self.buttons[6].setVisible(order_diff)
 
 
 class MainWindow(QMainWindow):
@@ -1275,6 +1533,7 @@ class MainWindow(QMainWindow):
         self.fetch_page = FetchPage()
         self.add_cards_page = AddCardsPage()
         self.add_b2b_page = AddB2BPage()
+        self.results_page = ResultsPage()
         self.settings_page = SettingsPage()
         self.pages.addWidget(self.home_page)
         self.pages.addWidget(self.fill_page)
@@ -1282,6 +1541,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.fetch_page)
         self.pages.addWidget(self.add_cards_page)
         self.pages.addWidget(self.add_b2b_page)
+        self.pages.addWidget(self.results_page)
         self.pages.addWidget(self.settings_page)
         layout.addWidget(self.sidebar)
         layout.addWidget(self.pages, 1)
@@ -1300,12 +1560,15 @@ class MainWindow(QMainWindow):
             3: FEATURE_FETCH_ORDERS,
             4: FEATURE_ADD_CARDS,
             5: FEATURE_ADD_B2B,
+            6: FEATURE_ORDER_DIFF,
         }.get(index)
         if required_feature and not self.license_info.allows(required_feature):
             return
         self.pages.setCurrentIndex(index)
         self.sidebar.select(index)
         if index == 6:
+            self.results_page.refresh_results()
+        elif index == 7:
             self.settings_page.load_values()
             self.settings_page.refresh_license_status()
 
@@ -1323,6 +1586,7 @@ class MainWindow(QMainWindow):
             3: FEATURE_FETCH_ORDERS,
             4: FEATURE_ADD_CARDS,
             5: FEATURE_ADD_B2B,
+            6: FEATURE_ORDER_DIFF,
         }.get(self.pages.currentIndex())
         if required_feature and not info.allows(required_feature):
             self.show_page(0)

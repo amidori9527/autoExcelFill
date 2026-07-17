@@ -1116,6 +1116,14 @@ def render_upstream_order_table(entries: list[OrderEntry]) -> str:
 
 def summary_metrics(job_result: JobDiffResult) -> list[SummaryMetric]:
     result = job_result.result
+    if result.special_mode == "payout":
+        return [
+            SummaryMetric("上游订单", result.a_row_count, result.a_amount, result.a_fee, result.a_count, "A列 TRANS_ID；仅统计 TRX_STATUS=COMPLETED", unique_order_ids(result.a_entries)),
+            SummaryMetric("我方付款订单", result.b_row_count, result.b_amount, result.b_fee, result.b_count, "D列 transactionId；仅统计交易状态=上游已打款", unique_order_ids(result.b_entries)),
+            SummaryMetric("上游独有订单", len(unique_entries(result.a_only)), result.a_only_amount, None, len(unique_entries(result.a_only)), "上游有，我方没有", unique_order_ids(result.a_only)),
+            SummaryMetric("我方独有订单", len(unique_entries(result.b_only)), result.b_only_amount, None, len(unique_entries(result.b_only)), "我方有，上游没有", unique_order_ids(result.b_only)),
+            SummaryMetric("金额/笔数不一致", len(result.mismatched), result.mismatch_amount, None, len(result.mismatched), "双方都有但金额或笔数不同", result.mismatched),
+        ]
     if is_duplicate_payment_mode(result.special_mode):
         upstream_note = (
             "TransactionHistoryRecords I列 Order ID"
@@ -1373,12 +1381,14 @@ def d0_upstream_detail_rows(entries: list[OrderEntry]) -> list[list[tuple[Any, b
     return rows
 
 
-def d0_tp_detail_rows(entries: list[OrderEntry]) -> list[list[tuple[Any, bool]]]:
+def d0_tp_detail_rows(
+    entries: list[OrderEntry], source_label: str = "TP独有"
+) -> list[list[tuple[Any, bool]]]:
     rows: list[list[tuple[Any, bool]]] = []
     for entry in sorted(unique_entries(entries), key=lambda item: item.order_id):
         rows.append(
             [
-                ("TP独有", False),
+                (source_label, False),
                 (entry.sheet_name, False),
                 (entry.row_number, True),
                 (entry.order_id, False),
@@ -1438,6 +1448,10 @@ def render_tabs(
 def render_d0_tabs(summary_html: str, result: DiffResult, section_key: str) -> tuple[str, dict[str, list[str]]]:
     copy_payloads: dict[str, list[str]] = {}
     panels: list[tuple[str, str, str]] = [("summary", "汇总", summary_html)]
+    is_payout = result.special_mode == "payout"
+    own_label = "我方独有" if is_payout else "TP独有"
+    own_count_label = "我方笔数" if is_payout else "TP笔数"
+    own_amount_label = "我方金额(PKR)" if is_payout else "TP金额(PKR)"
     detail_specs = [
         (
             "upstream-only",
@@ -1448,15 +1462,15 @@ def render_d0_tabs(summary_html: str, result: DiffResult, section_key: str) -> t
         ),
         (
             "tp-only",
-            "TP独有",
+            own_label,
             ["来源", "工作表", "源表行号", "订单号", "金额(PKR)", "手续费(PKR)"],
-            d0_tp_detail_rows(result.b_only),
+            d0_tp_detail_rows(result.b_only, own_label),
             unique_order_ids(result.b_only),
         ),
         (
             "mismatched",
             "金额/笔数不一致",
-            ["订单号", "上游笔数", "上游金额(PKR)", "TP笔数", "TP金额(PKR)", "笔数差", "金额差(PKR)"],
+            ["订单号", "上游笔数", "上游金额(PKR)", own_count_label, own_amount_label, "笔数差", "金额差(PKR)"],
             d0_mismatch_rows(result),
             list(result.mismatched),
         ),
@@ -1541,7 +1555,15 @@ def display_order_date(results: list[JobDiffResult]) -> str:
 
 
 def render_overview(results: list[JobDiffResult]) -> str:
-    order_date = display_order_date(results)
+    is_payout = bool(results) and all(
+        item.result.special_mode == "payout" for item in results
+    )
+    comparison_label = (
+        "代付订单"
+        if is_payout
+        else f"{display_order_date(results)} 的订单"
+    )
+    own_file_header = "我方文件" if is_payout else "TP文件"
     rows: list[str] = []
     for index, job_result in enumerate(results, start=1):
         platform = extract_platform_name(job_result.job)
@@ -1558,10 +1580,10 @@ def render_overview(results: list[JobDiffResult]) -> str:
     return f"""
     <section class="overview-section">
       <h1>订单差异对账总览</h1>
-      <p class="formula">共有 {number(len(results))} 组 {escape(order_date)} 的订单对比</p>
+      <p class="formula">共有 {number(len(results))} 组 {escape(comparison_label)}对比</p>
       <table class="overview-table">
         <thead>
-          <tr><th>序号</th><th>平台</th><th>上游文件</th><th>TP文件</th><th>定位</th></tr>
+          <tr><th>序号</th><th>平台</th><th>上游文件</th><th>{own_file_header}</th><th>定位</th></tr>
         </thead>
         <tbody>{''.join(rows)}</tbody>
       </table>
@@ -1576,13 +1598,26 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
     metric_rows, copy_payloads = render_metric_rows(metrics, f"g{index}")
     title_prefix = f"第 {index} 组：" if total > 1 else ""
     is_special_mode = is_duplicate_payment_mode(result.special_mode)
+    is_payout_mode = result.special_mode == "payout"
     special_label = special_platform_label(result.special_mode)
     profit = result.b_fee - result.a_fee if is_special_mode else result.b_fee - result.channel_cost
+    own_summary_label = "我方合计" if is_payout_mode else "TP合计"
     total_summary = (
         f"上游合计 {number(result.a_row_count)} 笔 / {money(result.a_amount)} PKR；"
-        f"TP合计 {number(result.b_row_count)} 笔 / {money(result.b_amount)} PKR"
+        f"{own_summary_label} {number(result.b_row_count)} 笔 / {money(result.b_amount)} PKR"
     )
-    if is_special_mode:
+    if is_payout_mode:
+        conclusion = (
+            f"{platform}：上游独有 {len(unique_entries(result.a_only))} 单；"
+            f"我方独有 {len(unique_entries(result.b_only))} 单；"
+            f"金额/笔数不一致 {len(result.mismatched)} 单。"
+        )
+        formula_text = (
+            "我方付款订单 D列 transactionId vs 上游账单 A列 TRANS_ID；"
+            "上游只统计 TRX_STATUS=COMPLETED，"
+            "我方只统计交易状态=上游已打款"
+        )
+    elif is_special_mode:
         difference_count = len(upstream_difference_entries(result))
         conclusion = (
             f"差异订单 {number(difference_count)} 个；"
@@ -1610,28 +1645,32 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
     )
     profit_tp_amount = result.a_amount if is_special_mode else result.b_amount
     upstream_platform_label = special_label if is_special_mode else platform
-    tp_platform_label = "tarspay" if is_special_mode else "TP"
-    tp_success_amount_label = (
-        f"{tp_platform_label}平台（{special_label}交易成功金额）"
-        if is_special_mode
-        else f"TP平台（{platform} 交易成功金额）"
-    )
-    tp_success_count_label = (
-        f"{tp_platform_label}平台（{special_label}成功笔数）"
-        if is_special_mode
-        else f"TP平台（{platform} 成功笔数）"
-    )
-    channel_cost_header = (
-        f'<th class="tp-head">{escape(tp_platform_label)}平台（{escape(special_label)}渠道成本）</th>'
-        if is_special_mode
-        else f'<th class="tp-head">tarspay平台（{escape(platform)}渠道成本）</th>'
-    )
+    tp_platform_label = "tarspay" if is_special_mode or is_payout_mode else "TP"
+    if is_payout_mode:
+        tp_success_amount_label = "tarspay平台（代付成功金额）"
+        tp_success_count_label = "tarspay平台（代付成功笔数）"
+        channel_cost_header = '<th class="tp-head">tarspay平台（代付渠道成本）</th>'
+    elif is_special_mode:
+        tp_success_amount_label = f"{tp_platform_label}平台（{special_label}交易成功金额）"
+        tp_success_count_label = f"{tp_platform_label}平台（{special_label}成功笔数）"
+        channel_cost_header = f'<th class="tp-head">{escape(tp_platform_label)}平台（{escape(special_label)}渠道成本）</th>'
+    else:
+        tp_success_amount_label = f"TP平台（{platform} 交易成功金额）"
+        tp_success_count_label = f"TP平台（{platform} 成功笔数）"
+        channel_cost_header = f'<th class="tp-head">tarspay平台（{escape(platform)}渠道成本）</th>'
     channel_cost_cell = f'<td class="num">{money(result.channel_cost)}</td>'
-    profit_header = (
-        f"{escape(tp_platform_label)}平台利润（{escape(special_label)}）"
-        if is_special_mode
-        else "TP平台利润（TP手续费-渠道成本）"
-    )
+    if is_payout_mode:
+        gross_profit_header = '<th class="profit-head">毛利润（平台手续费-上游手续费）</th>'
+        gross_profit_cell = f'<td class="num">{money(result.b_fee - result.a_fee)}</td>'
+        profit_header = "渠道利润参考（平台手续费-渠道成本）"
+    else:
+        gross_profit_header = ""
+        gross_profit_cell = ""
+        profit_header = (
+            f"{escape(tp_platform_label)}平台利润（{escape(special_label)}）"
+            if is_special_mode
+            else "TP平台利润（TP手续费-渠道成本）"
+        )
 
     summary_html = f"""
       <table class="summary-table">
@@ -1654,6 +1693,7 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
             <th class="do-head">{escape(upstream_platform_label)}平台（手续费）</th>
             {channel_cost_header}
             <th class="tp-head">{escape(tp_platform_label)}平台（手续费）</th>
+            {gross_profit_header}
             <th class="profit-head">{profit_header}</th>
           </tr>
         </thead>
@@ -1666,11 +1706,12 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
             <td class="num">{money(result.a_fee)}</td>
             {channel_cost_cell}
             <td class="num">{money(result.b_fee)}</td>
+            {gross_profit_cell}
             <td class="num">{money(profit)}</td>
           </tr>
         </tbody>
       </table>
-      <div class="file-note">上游：{escape(job_result.job.upstream_path.name)}<br>TP：{escape(job_result.job.backend_path.name)}{duplicate_file_note}</div>
+      <div class="file-note">上游：{escape(job_result.job.upstream_path.name)}<br>{'我方' if is_payout_mode else 'TP'}：{escape(job_result.job.backend_path.name)}{duplicate_file_note}</div>
     """
     body_html = summary_html
     if is_special_mode:
@@ -1682,7 +1723,7 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
 
     html = f"""
     <section class="result-section" id="result-section-{index}">
-      <h1>{title_prefix}订单差异对账结果（上游 vs TP） - {escape(platform)}</h1>
+      <h1>{title_prefix}{'代付' if is_payout_mode else ''}订单差异对账结果（上游 vs {'我方' if is_payout_mode else 'TP'}） - {escape(platform)}</h1>
       <p class="formula">{escape(formula_text)}</p>
       <p class="formula">{escape(total_summary)}</p>
       {body_html}

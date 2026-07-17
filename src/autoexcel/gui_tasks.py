@@ -6,7 +6,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Callable
 
-from autoexcel import add_b2b, add_cards, diff_orders, fetch_orders
+from autoexcel import add_b2b, add_cards, diff_orders, fetch_orders, payout_diff
 from autoexcel.fast_xlsx import (
     add_current_date_to_colored_sheets_fast,
     advance_summary_table_sheet_fast,
@@ -219,6 +219,45 @@ def _run_diff_jobs(
     return TaskResult(
         "订单比对完成",
         f"共处理 {len(results)} 组文件，上游独有订单 {upstream_only} 条。",
+        html_path,
+    )
+
+
+def run_payout_diff_task(directory: Path, log: LogCallback) -> TaskResult:
+    jobs = payout_diff.find_jobs_in_directory(directory)
+    return _run_payout_diff_jobs(jobs, log)
+
+
+def run_payout_diff_files_task(
+    upstream_path: Path,
+    backend_path: Path,
+    log: LogCallback,
+) -> TaskResult:
+    job = payout_diff.make_job(upstream_path, backend_path)
+    return _run_payout_diff_jobs([job], log)
+
+
+def _run_payout_diff_jobs(
+    jobs: list[diff_orders.DiffJob], log: LogCallback
+) -> TaskResult:
+    log(f"已匹配 {len(jobs)} 组代付订单文件")
+    results: list[diff_orders.JobDiffResult] = []
+    for index, job in enumerate(jobs, start=1):
+        log(f"正在比对第 {index}/{len(jobs)} 组：{job.upstream_path.name}")
+        results.append(payout_diff.read_job_diff_result(job))
+
+    result_dir = diff_orders.get_result_dir()
+    html_path = payout_diff.write_html_results(results, result_dir)
+    upstream_only = sum(
+        len(diff_orders.unique_entries(item.result.a_only)) for item in results
+    )
+    own_only = sum(
+        len(diff_orders.unique_entries(item.result.b_only)) for item in results
+    )
+    return TaskResult(
+        "代付订单比对完成",
+        f"共处理 {len(results)} 组文件，上游独有 {upstream_only} 条，"
+        f"我方独有 {own_only} 条。",
         html_path,
     )
 
