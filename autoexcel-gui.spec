@@ -49,7 +49,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="icon/cover.ico" if sys.platform == "win32" else None,
+    icon="icon/cover-v4.ico" if sys.platform == "win32" else None,
 )
 coll = COLLECT(
     exe,
