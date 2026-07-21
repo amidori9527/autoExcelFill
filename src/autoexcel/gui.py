@@ -89,7 +89,7 @@ QMainWindow, QWidget#appRoot, QScrollArea#pageScroll > QWidget > QWidget {
     background: #f6f7fb;
 }
 QFrame#sidebar { background: #111827; border: none; }
-QLabel#sidebarBrand { color: #ffffff; font-size: 18px; font-weight: 700; }
+QLabel#sidebarBrand { color: #ffffff; font-size: 17px; font-weight: 700; }
 QLabel#sidebarCaption { color: #7f8ca3; font-size: 11px; }
 QLabel#sidebarBrandCaption { color: #7f8ca3; font-size: 9px; font-weight: 700; }
 QLabel#navSection { color: #667085; font-size: 10px; font-weight: 700; }
@@ -1927,28 +1927,28 @@ class Sidebar(QFrame):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("sidebar")
-        self.setFixedWidth(220)
+        self.setFixedWidth(248)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 26, 18, 20)
+        layout.setContentsMargins(16, 26, 16, 20)
         layout.setSpacing(8)
 
         brand_row = QHBoxLayout()
-        brand_row.setSpacing(10)
-        brand_icon = QLabel()
-        brand_icon.setFixedSize(36, 36)
+        brand_row.setSpacing(9)
+        self.brand_icon = QLabel()
+        self.brand_icon.setFixedSize(34, 34)
         icon_path = brand_icon_path()
         if icon_path.is_file():
-            brand_icon.setPixmap(QIcon(str(icon_path)).pixmap(QSize(36, 36)))
-        brand = QLabel("SmartSheet Desk")
-        brand.setObjectName("sidebarBrand")
-        caption = QLabel("SMART DATA OPERATIONS")
-        caption.setObjectName("sidebarBrandCaption")
+            self.brand_icon.setPixmap(QIcon(str(icon_path)).pixmap(QSize(34, 34)))
+        self.brand_label = QLabel("SmartSheet Desk")
+        self.brand_label.setObjectName("sidebarBrand")
+        self.brand_caption = QLabel("SMART DATA OPERATIONS")
+        self.brand_caption.setObjectName("sidebarBrandCaption")
         brand_text = QVBoxLayout()
         brand_text.setContentsMargins(0, 0, 0, 0)
         brand_text.setSpacing(1)
-        brand_text.addWidget(brand)
-        brand_text.addWidget(caption)
-        brand_row.addWidget(brand_icon)
+        brand_text.addWidget(self.brand_label)
+        brand_text.addWidget(self.brand_caption)
+        brand_row.addWidget(self.brand_icon)
         brand_row.addLayout(brand_text, 1)
         layout.addLayout(brand_row)
         layout.addSpacing(28)
