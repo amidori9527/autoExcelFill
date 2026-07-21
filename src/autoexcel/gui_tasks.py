@@ -231,9 +231,16 @@ def run_payout_diff_task(directory: Path, log: LogCallback) -> TaskResult:
 def run_payout_diff_files_task(
     upstream_path: Path,
     backend_path: Path,
+    algorithm: str,
+    collection_path: Path | None,
     log: LogCallback,
 ) -> TaskResult:
-    job = payout_diff.make_job(upstream_path, backend_path)
+    job = payout_diff.make_job(
+        upstream_path,
+        backend_path,
+        algorithm=algorithm,
+        collection_path=collection_path,
+    )
     return _run_payout_diff_jobs([job], log)
 
 

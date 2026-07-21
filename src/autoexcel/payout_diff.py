@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 import re
@@ -14,6 +14,7 @@ from autoexcel import diff_orders
 
 
 PAYOUT_MODE = "payout"
+PAYOUT_FINERBIT_MODE = "payout_finerbit"
 UPSTREAM_REQUIRED_HEADERS = {
     "TRANS_ID",
     "TRX_STATUS",
@@ -27,6 +28,25 @@ BACKEND_REQUIRED_HEADERS = {
     "付款金额(PKR)",
     "手续费(PKR)",
     "支付方式名称",
+}
+FINERBIT_COLLECTION_REQUIRED_HEADERS = {
+    "ChannelName",
+    "PurchaseAmount",
+    "TransactionStatus",
+    "Created Date",
+}
+FINERBIT_DISBURSEMENT_REQUIRED_HEADERS = {
+    "Created Date Time",
+    "Reference Id",
+    "Received Amount",
+    "Status",
+}
+FINERBIT_BACKEND_REQUIRED_HEADERS = {
+    "平台订单号",
+    "付款金额(PKR)",
+    "手续费(PKR)",
+    "渠道成本(PKR)",
+    "交易状态",
 }
 SUPPORTED_UPSTREAM_SUFFIXES = {".csv", ".xlsx"}
 SUPPORTED_BACKEND_SUFFIXES = {".xlsx"}
@@ -58,15 +78,17 @@ def _csv_rows(path: Path) -> Iterator[tuple[int, list[str]]]:
 def _xlsx_rows(
     path: Path, max_rows_per_sheet: int | None = None
 ) -> Iterator[tuple[str, int, tuple[object, ...]]]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
-    try:
-        for worksheet in workbook.worksheets:
-            for row_number, row in enumerate(worksheet.iter_rows(values_only=True), start=1):
-                if max_rows_per_sheet is not None and row_number > max_rows_per_sheet:
-                    break
-                yield worksheet.title, row_number, row
-    finally:
-        workbook.close()
+    with path.open("rb") as stream:
+        workbook = load_workbook(stream, read_only=True, data_only=True)
+        try:
+            for worksheet in workbook.worksheets:
+                worksheet.reset_dimensions()
+                for row_number, row in enumerate(worksheet.iter_rows(values_only=True), start=1):
+                    if max_rows_per_sheet is not None and row_number > max_rows_per_sheet:
+                        break
+                    yield worksheet.title, row_number, row
+        finally:
+            workbook.close()
 
 
 def file_kind(path: Path) -> str | None:
@@ -97,7 +119,49 @@ def validate_file(path: Path, label: str, allowed_suffixes: set[str]) -> None:
         raise ValueError(f"{label}必须是 {suffixes} 文件")
 
 
-def make_job(upstream_path: Path, backend_path: Path) -> diff_orders.DiffJob:
+def _xlsx_contains_headers(path: Path, required_headers: set[str]) -> bool:
+    return any(
+        contains_headers(row, required_headers)
+        for _sheet_name, _row_number, row in _xlsx_rows(
+            path, max_rows_per_sheet=20
+        )
+    )
+
+
+def make_job(
+    upstream_path: Path,
+    backend_path: Path,
+    algorithm: str = "zee",
+    collection_path: Path | None = None,
+) -> diff_orders.DiffJob:
+    normalized_algorithm = algorithm.strip().lower()
+    if normalized_algorithm == "finerbit":
+        validate_file(upstream_path, "finerBit代付上游账单", SUPPORTED_UPSTREAM_SUFFIXES)
+        validate_file(backend_path, "我方付款订单", SUPPORTED_BACKEND_SUFFIXES)
+        if collection_path is None:
+            raise ValueError("代付 finerBit 必须选择上游代收账单")
+        validate_file(collection_path, "finerBit上游代收账单", SUPPORTED_UPSTREAM_SUFFIXES)
+        if not _xlsx_contains_headers(
+            upstream_path, FINERBIT_DISBURSEMENT_REQUIRED_HEADERS
+        ):
+            raise ValueError(f"{upstream_path.name} 未找到 finerBit 代付上游必需表头")
+        if not _xlsx_contains_headers(
+            backend_path, FINERBIT_BACKEND_REQUIRED_HEADERS
+        ):
+            raise ValueError(f"{backend_path.name} 未找到我方付款订单必需表头")
+        if not _xlsx_contains_headers(
+            collection_path, FINERBIT_COLLECTION_REQUIRED_HEADERS
+        ):
+            raise ValueError(f"{collection_path.name} 未找到 finerBit 上游代收必需表头")
+        return diff_orders.DiffJob(
+            upstream_path=upstream_path,
+            backend_path=backend_path,
+            platform_mode="finerbit",
+            collection_path=collection_path,
+        )
+
+    if normalized_algorithm != "zee":
+        raise ValueError(f"不支持的代付算法：{algorithm}")
     validate_file(upstream_path, "代付上游账单", SUPPORTED_UPSTREAM_SUFFIXES)
     validate_file(backend_path, "我方付款订单", SUPPORTED_BACKEND_SUFFIXES)
     if file_kind(upstream_path) != "upstream":
@@ -107,7 +171,7 @@ def make_job(upstream_path: Path, backend_path: Path) -> diff_orders.DiffJob:
     return diff_orders.DiffJob(
         upstream_path=upstream_path,
         backend_path=backend_path,
-        platform_mode=PAYOUT_MODE,
+        platform_mode="zee",
     )
 
 
@@ -166,20 +230,22 @@ def _read_csv_table(path: Path, required_headers: set[str]) -> Iterator[tuple[in
 def _read_xlsx_table(
     path: Path, required_headers: set[str]
 ) -> Iterator[tuple[str, int, tuple[object, ...], dict[str, int]]]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
     found_header = False
-    try:
-        for worksheet in workbook.worksheets:
-            mapping: dict[str, int] | None = None
-            for row_number, row in enumerate(worksheet.iter_rows(values_only=True), start=1):
-                if mapping is None:
-                    if contains_headers(row, required_headers):
-                        mapping = header_map(row)
-                        found_header = True
-                    continue
-                yield worksheet.title, row_number, row, mapping
-    finally:
-        workbook.close()
+    with path.open("rb") as stream:
+        workbook = load_workbook(stream, read_only=True, data_only=True)
+        try:
+            for worksheet in workbook.worksheets:
+                worksheet.reset_dimensions()
+                mapping: dict[str, int] | None = None
+                for row_number, row in enumerate(worksheet.iter_rows(values_only=True), start=1):
+                    if mapping is None:
+                        if contains_headers(row, required_headers):
+                            mapping = header_map(row)
+                            found_header = True
+                        continue
+                    yield worksheet.title, row_number, row, mapping
+        finally:
+            workbook.close()
     if not found_header:
         raise ValueError(f"{path.name} 未找到必需表头")
 
@@ -260,7 +326,158 @@ def payout_channel_cost(entries: list[diff_orders.OrderEntry]) -> Decimal:
     return total
 
 
+def load_finerbit_fee_rates() -> tuple[Decimal, Decimal]:
+    return diff_orders.load_payout_finerbit_fee_rates()
+
+
+def normalize_report_date(value: object) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value or "").strip()
+    for pattern, date_format in (
+        (r"\d{2}-\d{2}-\d{4}", "%d-%m-%Y"),
+        (r"\d{4}-\d{2}-\d{2}", "%Y-%m-%d"),
+        (r"\d{2}/\d{2}/\d{4}", "%d/%m/%Y"),
+        (r"\d{4}/\d{2}/\d{2}", "%Y/%m/%d"),
+    ):
+        match = re.search(pattern, text)
+        if match:
+            return datetime.strptime(match.group(), date_format).date().isoformat()
+    raise ValueError(f"无法识别账单日期：{value}")
+
+
+def read_finerbit_collection_amounts(
+    path: Path,
+) -> tuple[Decimal, Decimal, str]:
+    easypaisa_amount = Decimal("0")
+    jazzcash_amount = Decimal("0")
+    report_dates: set[str] = set()
+    for _sheet_name, _row_number, row, mapping in _read_xlsx_table(
+        path, FINERBIT_COLLECTION_REQUIRED_HEADERS
+    ):
+        status = str(_row_value(row, mapping, "TransactionStatus") or "").strip().lower()
+        if status != "success":
+            continue
+        report_dates.add(normalize_report_date(_row_value(row, mapping, "Created Date")))
+        channel = str(_row_value(row, mapping, "ChannelName") or "").strip().lower()
+        amount = diff_orders.decimal_value(_row_value(row, mapping, "PurchaseAmount"))
+        if "easypaisa" in channel or "easy paisa" in channel:
+            easypaisa_amount += amount
+        elif "jazzcash" in channel or "jazz cash" in channel:
+            jazzcash_amount += amount
+    if len(report_dates) != 1:
+        dates = "、".join(sorted(report_dates)) or "无"
+        raise ValueError(f"上游代收账单应只有一个成功交易日期，当前为：{dates}")
+    return easypaisa_amount, jazzcash_amount, next(iter(report_dates))
+
+
+def read_finerbit_disbursement_entries(
+    path: Path, report_date: str
+) -> list[diff_orders.OrderEntry]:
+    entries: list[diff_orders.OrderEntry] = []
+    for sheet_name, row_number, row, mapping in _read_xlsx_table(
+        path, FINERBIT_DISBURSEMENT_REQUIRED_HEADERS
+    ):
+        status = str(_row_value(row, mapping, "Status") or "").strip().lower()
+        if status != "success":
+            continue
+        created_at = _row_value(row, mapping, "Created Date Time")
+        if normalize_report_date(created_at) != report_date:
+            continue
+        order_id = diff_orders.normalize_order_id(_row_value(row, mapping, "Reference Id"))
+        if order_id is None:
+            continue
+        entries.append(
+            diff_orders.OrderEntry(
+                order_id=order_id,
+                row_number=row_number,
+                amount=diff_orders.decimal_value(
+                    _row_value(row, mapping, "Received Amount")
+                ),
+                sheet_name=sheet_name,
+                extra={"status": status},
+            )
+        )
+    return entries
+
+
+def read_finerbit_backend_entries(path: Path) -> list[diff_orders.OrderEntry]:
+    entries: list[diff_orders.OrderEntry] = []
+    for sheet_name, row_number, row, mapping in _read_xlsx_table(
+        path, FINERBIT_BACKEND_REQUIRED_HEADERS
+    ):
+        status = str(_row_value(row, mapping, "交易状态") or "").strip()
+        if status != "上游已打款":
+            continue
+        order_id = diff_orders.normalize_order_id(_row_value(row, mapping, "平台订单号"))
+        if order_id is None:
+            continue
+        entries.append(
+            diff_orders.OrderEntry(
+                order_id=order_id,
+                row_number=row_number,
+                amount=diff_orders.decimal_value(
+                    _row_value(row, mapping, "付款金额(PKR)")
+                ),
+                fee=diff_orders.decimal_value(
+                    _row_value(row, mapping, "手续费(PKR)")
+                ),
+                sheet_name=sheet_name,
+                extra={
+                    "status": status,
+                    "channel_cost": _row_value(row, mapping, "渠道成本(PKR)"),
+                },
+            )
+        )
+    return entries
+
+
+def finerbit_fee(
+    easypaisa_amount: Decimal,
+    jazzcash_amount: Decimal,
+    easypaisa_rate: Decimal,
+    jazzcash_rate: Decimal,
+) -> Decimal:
+    return easypaisa_amount * easypaisa_rate + jazzcash_amount * jazzcash_rate
+
+
 def read_job_diff_result(job: diff_orders.DiffJob) -> diff_orders.JobDiffResult:
+    if job.platform_mode == "finerbit":
+        if job.collection_path is None:
+            raise ValueError("代付 finerBit 必须选择上游代收账单")
+        backend_entries = read_finerbit_backend_entries(job.backend_path)
+        easypaisa_amount, jazzcash_amount, report_date = read_finerbit_collection_amounts(
+            job.collection_path
+        )
+        upstream_entries = read_finerbit_disbursement_entries(
+            job.upstream_path, report_date
+        )
+        easypaisa_rate, jazzcash_rate = load_finerbit_fee_rates()
+        result = diff_orders.diff_orders(upstream_entries, backend_entries)
+        result = replace(
+            result,
+            mismatched=[],
+            mismatch_amount=Decimal("0"),
+            a_fee=finerbit_fee(
+                easypaisa_amount,
+                jazzcash_amount,
+                easypaisa_rate,
+                jazzcash_rate,
+            ),
+            b_fee=sum((entry.fee for entry in backend_entries), Decimal("0")),
+            channel_cost=sum(
+                (
+                    diff_orders.decimal_value(entry.extra.get("channel_cost"))
+                    for entry in backend_entries
+                ),
+                Decimal("0"),
+            ),
+            special_mode=PAYOUT_FINERBIT_MODE,
+        )
+        return diff_orders.JobDiffResult(job=job, result=result)
+
     upstream_entries = read_upstream_entries(job.upstream_path)
     backend_entries = read_backend_entries(job.backend_path)
     result = diff_orders.diff_orders(upstream_entries, backend_entries)

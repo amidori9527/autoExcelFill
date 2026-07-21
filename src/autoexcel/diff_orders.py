@@ -69,6 +69,8 @@ BACKEND_FILE_PREFIX = "收款订单"
 DUPLICATE_PAYMENT_FILE_KEYWORD = "重复支付订单"
 DEFAULT_EASYPAISA_RATE_PERCENT = Decimal("4")
 DEFAULT_JAZZCASH_RATE_PERCENT = Decimal("2.3")
+DEFAULT_PAYOUT_FINERBIT_EASYPAISA_RATE_PERCENT = Decimal("1.3")
+DEFAULT_PAYOUT_FINERBIT_JAZZCASH_RATE_PERCENT = Decimal("1.25")
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,7 @@ class DiffJob:
     backend_path: Path
     duplicate_path: Path | None = None
     platform_mode: str = ""
+    collection_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -544,6 +547,22 @@ def load_finerbit_fee_rates() -> tuple[Decimal, Decimal]:
     )
 
 
+def load_payout_finerbit_fee_rates() -> tuple[Decimal, Decimal]:
+    config = load_diff_config()
+    return (
+        _configured_percentage_rate(
+            config,
+            "payout_finerbit_easypaisa_rate_percent",
+            DEFAULT_PAYOUT_FINERBIT_EASYPAISA_RATE_PERCENT,
+        ),
+        _configured_percentage_rate(
+            config,
+            "payout_finerbit_jazzcash_rate_percent",
+            DEFAULT_PAYOUT_FINERBIT_JAZZCASH_RATE_PERCENT,
+        ),
+    )
+
+
 def choose_diff_jobs_interactive() -> list[DiffJob]:
     if not sys.stdin.isatty():
         raise RuntimeError("交互模式需要可输入的终端；或请使用 --target-date/--a/--b 参数直接运行。")
@@ -785,6 +804,10 @@ def is_easypaisa_job(job: DiffJob) -> bool:
 
 def is_duplicate_payment_mode(mode: str) -> bool:
     return mode in {"finerbit", "easypaisa"}
+
+
+def is_payout_mode(mode: str) -> bool:
+    return mode in {"payout", "payout_finerbit"}
 
 
 def special_platform_label(mode: str) -> str:
@@ -1116,7 +1139,14 @@ def render_upstream_order_table(entries: list[OrderEntry]) -> str:
 
 def summary_metrics(job_result: JobDiffResult) -> list[SummaryMetric]:
     result = job_result.result
-    if result.special_mode == "payout":
+    if is_payout_mode(result.special_mode):
+        if result.special_mode == "payout_finerbit":
+            return [
+                SummaryMetric("上游代付订单", result.a_row_count, result.a_amount, result.a_fee, result.a_count, "E列 Reference Id；Q列 Received Amount；仅统计 Status=Success 且日期与代收账单一致", unique_order_ids(result.a_entries)),
+                SummaryMetric("我方付款订单", result.b_row_count, result.b_amount, result.b_fee, result.b_count, "A列 平台订单号；G列付款金额；仅统计交易状态=上游已打款", unique_order_ids(result.b_entries)),
+                SummaryMetric("上游独有订单", len(unique_entries(result.a_only)), result.a_only_amount, None, len(unique_entries(result.a_only)), "上游有，我方没有", unique_order_ids(result.a_only)),
+                SummaryMetric("我方独有订单", len(unique_entries(result.b_only)), result.b_only_amount, None, len(unique_entries(result.b_only)), "我方有，上游没有", unique_order_ids(result.b_only)),
+            ]
         return [
             SummaryMetric("上游订单", result.a_row_count, result.a_amount, result.a_fee, result.a_count, "A列 TRANS_ID；仅统计 TRX_STATUS=COMPLETED", unique_order_ids(result.a_entries)),
             SummaryMetric("我方付款订单", result.b_row_count, result.b_amount, result.b_fee, result.b_count, "D列 transactionId；仅统计交易状态=上游已打款", unique_order_ids(result.b_entries)),
@@ -1448,7 +1478,7 @@ def render_tabs(
 def render_d0_tabs(summary_html: str, result: DiffResult, section_key: str) -> tuple[str, dict[str, list[str]]]:
     copy_payloads: dict[str, list[str]] = {}
     panels: list[tuple[str, str, str]] = [("summary", "汇总", summary_html)]
-    is_payout = result.special_mode == "payout"
+    is_payout = is_payout_mode(result.special_mode)
     own_label = "我方独有" if is_payout else "TP独有"
     own_count_label = "我方笔数" if is_payout else "TP笔数"
     own_amount_label = "我方金额(PKR)" if is_payout else "TP金额(PKR)"
@@ -1467,14 +1497,17 @@ def render_d0_tabs(summary_html: str, result: DiffResult, section_key: str) -> t
             d0_tp_detail_rows(result.b_only, own_label),
             unique_order_ids(result.b_only),
         ),
-        (
-            "mismatched",
-            "金额/笔数不一致",
-            ["订单号", "上游笔数", "上游金额(PKR)", own_count_label, own_amount_label, "笔数差", "金额差(PKR)"],
-            d0_mismatch_rows(result),
-            list(result.mismatched),
-        ),
     ]
+    if result.special_mode != "payout_finerbit":
+        detail_specs.append(
+            (
+                "mismatched",
+                "金额/笔数不一致",
+                ["订单号", "上游笔数", "上游金额(PKR)", own_count_label, own_amount_label, "笔数差", "金额差(PKR)"],
+                d0_mismatch_rows(result),
+                list(result.mismatched),
+            )
+        )
 
     for key, title, headers, rows, order_ids in detail_specs:
         panel_html, panel_payloads = render_detail_panel(section_key, key, title, headers, rows, order_ids)
@@ -1556,7 +1589,7 @@ def display_order_date(results: list[JobDiffResult]) -> str:
 
 def render_overview(results: list[JobDiffResult]) -> str:
     is_payout = bool(results) and all(
-        item.result.special_mode == "payout" for item in results
+        is_payout_mode(item.result.special_mode) for item in results
     )
     comparison_label = (
         "代付订单"
@@ -1566,7 +1599,11 @@ def render_overview(results: list[JobDiffResult]) -> str:
     own_file_header = "我方文件" if is_payout else "TP文件"
     rows: list[str] = []
     for index, job_result in enumerate(results, start=1):
-        platform = extract_platform_name(job_result.job)
+        platform = (
+            "finerBit"
+            if job_result.result.special_mode == "payout_finerbit"
+            else extract_platform_name(job_result.job)
+        )
         rows.append(
             "<tr>"
             f"<td class=\"num\">{index}</td>"
@@ -1598,22 +1635,32 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
     metric_rows, copy_payloads = render_metric_rows(metrics, f"g{index}")
     title_prefix = f"第 {index} 组：" if total > 1 else ""
     is_special_mode = is_duplicate_payment_mode(result.special_mode)
-    is_payout_mode = result.special_mode == "payout"
+    payout_mode = is_payout_mode(result.special_mode)
+    is_payout_finerbit = result.special_mode == "payout_finerbit"
+    if is_payout_finerbit:
+        platform = "finerBit"
     special_label = special_platform_label(result.special_mode)
     profit = result.b_fee - result.a_fee if is_special_mode else result.b_fee - result.channel_cost
-    own_summary_label = "我方合计" if is_payout_mode else "TP合计"
+    own_summary_label = "我方合计" if payout_mode else "TP合计"
     total_summary = (
         f"上游合计 {number(result.a_row_count)} 笔 / {money(result.a_amount)} PKR；"
         f"{own_summary_label} {number(result.b_row_count)} 笔 / {money(result.b_amount)} PKR"
     )
-    if is_payout_mode:
+    if payout_mode:
         conclusion = (
             f"{platform}：上游独有 {len(unique_entries(result.a_only))} 单；"
+            f"我方独有 {len(unique_entries(result.b_only))} 单。"
+            if is_payout_finerbit
+            else f"{platform}：上游独有 {len(unique_entries(result.a_only))} 单；"
             f"我方独有 {len(unique_entries(result.b_only))} 单；"
             f"金额/笔数不一致 {len(result.mismatched)} 单。"
         )
         formula_text = (
-            "我方付款订单 D列 transactionId vs 上游账单 A列 TRANS_ID；"
+            "我方付款订单 A列 平台订单号 vs 上游账单 E列 Reference Id；"
+            "上游只统计 Status=Success 且日期与代收账单一致，"
+            "我方只统计交易状态=上游已打款"
+            if is_payout_finerbit
+            else "我方付款订单 D列 transactionId vs 上游账单 A列 TRANS_ID；"
             "上游只统计 TRX_STATUS=COMPLETED，"
             "我方只统计交易状态=上游已打款"
         )
@@ -1644,9 +1691,16 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
         f"<br>代收重复：{escape(job_result.job.duplicate_path.name)}" if job_result.job.duplicate_path else ""
     )
     profit_tp_amount = result.a_amount if is_special_mode else result.b_amount
-    upstream_platform_label = special_label if is_special_mode else platform
-    tp_platform_label = "tarspay" if is_special_mode or is_payout_mode else "TP"
-    if is_payout_mode:
+    upstream_platform_label = (
+        "finerBit" if is_payout_finerbit else special_label if is_special_mode else platform
+    )
+    upstream_fee_platform_label = upstream_platform_label
+    tp_platform_label = "tarspay" if is_special_mode or payout_mode else "TP"
+    if is_payout_finerbit:
+        tp_success_amount_label = "tarspay平台（finerBit交易成功金额）"
+        tp_success_count_label = "tarspay平台（finerBit成功笔数）"
+        channel_cost_header = '<th class="tp-head">tarspay平台（finerBit渠道成本）</th>'
+    elif payout_mode:
         tp_success_amount_label = "tarspay平台（代付成功金额）"
         tp_success_count_label = "tarspay平台（代付成功笔数）"
         channel_cost_header = '<th class="tp-head">tarspay平台（代付渠道成本）</th>'
@@ -1659,9 +1713,13 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
         tp_success_count_label = f"TP平台（{platform} 成功笔数）"
         channel_cost_header = f'<th class="tp-head">tarspay平台（{escape(platform)}渠道成本）</th>'
     channel_cost_cell = f'<td class="num">{money(result.channel_cost)}</td>'
-    if is_payout_mode:
-        gross_profit_header = '<th class="profit-head">毛利润（平台手续费-上游手续费）</th>'
+    if is_payout_finerbit:
+        gross_profit_header = '<th class="profit-head">毛利润（平台手续费-finerBit手续费）</th>'
         gross_profit_cell = f'<td class="num">{money(result.b_fee - result.a_fee)}</td>'
+        profit_header = "渠道利润参考（平台手续费-渠道成本）"
+    elif payout_mode:
+        gross_profit_header = '<th class="profit-head">毛利润（我方付款金额×1.5%）</th>'
+        gross_profit_cell = f'<td class="num">{money(result.b_amount * Decimal("0.015"))}</td>'
         profit_header = "渠道利润参考（平台手续费-渠道成本）"
     else:
         gross_profit_header = ""
@@ -1690,7 +1748,7 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
             <th class="tp-head">{escape(tp_success_amount_label)}</th>
             <th class="do-head">{escape(upstream_platform_label)}平台（成功笔数）</th>
             <th class="tp-head">{escape(tp_success_count_label)}</th>
-            <th class="do-head">{escape(upstream_platform_label)}平台（手续费）</th>
+            <th class="do-head">{escape(upstream_fee_platform_label)}平台（手续费）</th>
             {channel_cost_header}
             <th class="tp-head">{escape(tp_platform_label)}平台（手续费）</th>
             {gross_profit_header}
@@ -1711,7 +1769,7 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
           </tr>
         </tbody>
       </table>
-      <div class="file-note">上游：{escape(job_result.job.upstream_path.name)}<br>{'我方' if is_payout_mode else 'TP'}：{escape(job_result.job.backend_path.name)}{duplicate_file_note}</div>
+      <div class="file-note">上游：{escape(job_result.job.upstream_path.name)}<br>{'我方' if payout_mode else 'TP'}：{escape(job_result.job.backend_path.name)}{duplicate_file_note}{f'<br>上游代收：{escape(job_result.job.collection_path.name)}' if job_result.job.collection_path else ''}</div>
     """
     body_html = summary_html
     if is_special_mode:
@@ -1723,7 +1781,7 @@ def render_result_section(job_result: JobDiffResult, index: int, total: int) -> 
 
     html = f"""
     <section class="result-section" id="result-section-{index}">
-      <h1>{title_prefix}{'代付' if is_payout_mode else ''}订单差异对账结果（上游 vs {'我方' if is_payout_mode else 'TP'}） - {escape(platform)}</h1>
+      <h1>{title_prefix}{'代付' if payout_mode else ''}订单差异对账结果（上游 vs {'我方' if payout_mode else 'TP'}） - {escape(platform)}</h1>
       <p class="formula">{escape(formula_text)}</p>
       <p class="formula">{escape(total_summary)}</p>
       {body_html}

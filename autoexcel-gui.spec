@@ -1,6 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import sys
+from pathlib import Path
+import re
+
+
+APP_VERSION = re.search(
+    r'^VERSION\s*=\s*"([^"]+)"',
+    Path("src/autoexcel/version.py").read_text(encoding="utf-8"),
+    flags=re.MULTILINE,
+).group(1)
 
 
 a = Analysis(
@@ -9,7 +18,8 @@ a = Analysis(
     binaries=[],
     datas=[
         ("template/order_diff.html", "template"),
-        ("icon/cover.png", "icon"),
+        ("icon/cover-v4.png", "icon"),
+        ("icon/sidebar", "icon/sidebar"),
         ("config.ini", "."),
         ("loginConf.example.ini", "."),
         ("VERSION.txt", "."),
@@ -55,7 +65,11 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="SmartSheet Desk.app",
-        icon="icon/cover.icns",
+        icon="icon/cover-v4.icns",
         bundle_identifier="com.smartsheetdesk.desktop",
-        info_plist={"NSHighResolutionCapable": True},
+        info_plist={
+            "CFBundleShortVersionString": APP_VERSION,
+            "CFBundleVersion": APP_VERSION,
+            "NSHighResolutionCapable": True,
+        },
     )

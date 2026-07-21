@@ -3,15 +3,15 @@ from __future__ import annotations
 import re
 import sys
 import traceback
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from threading import Event
 from typing import Callable
 
-from PySide6.QtCore import QDate, QLocale, QObject, QRunnable, QThreadPool, Qt, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QFont, QIcon
+from PySide6.QtCore import QByteArray, QDate, QLocale, QObject, QRectF, QRunnable, QSize, QThreadPool, Qt, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QAbstractSpinBox,
     QApplication,
     QCalendarWidget,
@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGridLayout,
-    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -36,8 +35,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -92,8 +89,9 @@ QMainWindow, QWidget#appRoot, QScrollArea#pageScroll > QWidget > QWidget {
     background: #f6f7fb;
 }
 QFrame#sidebar { background: #111827; border: none; }
-QLabel#sidebarBrand { color: #ffffff; font-size: 21px; font-weight: 700; }
+QLabel#sidebarBrand { color: #ffffff; font-size: 18px; font-weight: 700; }
 QLabel#sidebarCaption { color: #7f8ca3; font-size: 11px; }
+QLabel#sidebarBrandCaption { color: #7f8ca3; font-size: 9px; font-weight: 700; }
 QLabel#navSection { color: #667085; font-size: 10px; font-weight: 700; }
 QPushButton#navButton {
     min-height: 42px; padding: 0 14px; text-align: left;
@@ -105,23 +103,47 @@ QLabel#pageEyebrow { color: #2f5bea; font-size: 11px; font-weight: 700; }
 QLabel#pageTitle { color: #101828; font-size: 27px; font-weight: 700; }
 QLabel#heroTitle { color: #101828; font-size: 31px; font-weight: 700; }
 QLabel#sectionTitle { color: #101828; font-size: 16px; font-weight: 700; }
-QLabel#cardTitle { color: #101828; font-size: 16px; font-weight: 700; }
+QLabel#cardTitle { color: #101828; font-size: 17px; font-weight: 700; }
+QLabel#featuredCardTitle { color: #101828; font-size: 19px; font-weight: 700; }
+QLabel#cardDescription { color: #7a8699; font-size: 12px; }
+QLabel#cardAction { color: #3157d5; font-size: 11px; font-weight: 700; }
 QLabel#fieldLabel { color: #344054; font-size: 12px; font-weight: 700; }
 QLabel#muted, QLabel#fieldHint { color: #7a8699; }
 QLabel#fieldHint { font-size: 11px; }
 QLabel#statusPill {
     color: #3157d5; background: #edf2ff; border-radius: 10px;
-    padding: 3px 9px; font-size: 11px; font-weight: 700;
+    padding: 2px 7px; font-size: 10px; font-weight: 700;
 }
-QFrame#panel, QFrame#homeCard, QFrame#settingSection {
+QFrame#panel, QFrame#homeCard, QFrame#homeFeaturedCard, QFrame#settingSection {
     background: #ffffff; border: 1px solid #e5e8ef; border-radius: 12px;
 }
+QFrame#homeFeaturedCard { background: #f4f7ff; border-color: #cdd7fb; }
 QFrame#licensePanel {
     background: #f8faff; border: 1px solid #cdd7fb; border-radius: 12px;
 }
 QLabel#licenseValid { color: #067647; font-weight: 700; }
 QLabel#licenseInvalid { color: #b42318; font-weight: 700; }
 QFrame#homeCard:hover { border-color: #aebcf3; background: #fbfcff; }
+QFrame#homeFeaturedCard:hover { border-color: #9eafe9; background: #e9efff; }
+QFrame#resultRow {
+    background: #fbfcff; border: 1px solid #e5e8ef; border-radius: 10px;
+}
+QFrame#resultRow:hover { background: #f7f9ff; border-color: #b8c5f4; }
+QFrame#emptyResult { background: #fbfcff; border: 1px dashed #d7dce5; border-radius: 10px; }
+QLabel#resultTitle { color: #172033; font-size: 14px; font-weight: 700; }
+QLabel#resultBadgeCollection {
+    color: #067647; background: #ecfdf3; border-radius: 9px;
+    padding: 4px 10px; font-size: 11px; font-weight: 700;
+}
+QLabel#resultBadgePayout {
+    color: #4F46E5; background: #EEF2FF; border-radius: 9px;
+    padding: 4px 10px; font-size: 11px; font-weight: 700;
+}
+QPushButton#resultViewButton {
+    color: #3157d5; background: #f4f7ff; border-color: #cdd7fb; font-weight: 700;
+}
+QPushButton#resultViewButton:hover { color: #244ac7; background: #e9efff; border-color: #9eafe9; }
+QScrollArea#resultScroll, QWidget#resultList { background: transparent; }
 QLabel#cardIcon {
     color: #2f5bea; background: #edf2ff; border-radius: 9px;
     font-size: 21px; font-weight: 700; qproperty-alignment: AlignCenter;
@@ -160,6 +182,204 @@ QCalendarWidget QTableView {
     selection-color: #ffffff; outline: none;
 }
 """
+
+
+DEFAULT_THEME = "indigo"
+THEME_LABELS = {
+    "emerald": "翡翠绿",
+    "indigo": "靛青蓝",
+}
+THEME_PALETTES = {
+    "emerald": {
+        "text": "#17211d",
+        "canvas": "#f4f7f5",
+        "sidebar": "#14211d",
+        "sidebar_muted": "#7f948c",
+        "muted_dark": "#66776f",
+        "sidebar_text": "#b8c8c2",
+        "sidebar_hover": "#20312b",
+        "primary": "#24845f",
+        "title": "#17211d",
+        "body": "#34463f",
+        "muted": "#75847e",
+        "primary_text": "#2a6f56",
+        "primary_soft": "#e8f4ef",
+        "border": "#dde6e2",
+        "soft_surface": "#f2f8f5",
+        "soft_border": "#c9ded5",
+        "hover_border": "#a7cdbd",
+        "hover_surface": "#f8fbf9",
+        "result_hover": "#f3f9f6",
+        "result_hover_border": "#a9cdbe",
+        "control_border": "#d4dfda",
+        "primary_button_soft": "#f1f8f5",
+        "primary_hover": "#1c6b4d",
+        "primary_soft_hover": "#e3f1eb",
+        "control_hover_border": "#9fc6b6",
+        "ghost_hover": "#eaf1ee",
+        "disabled_text": "#98a69f",
+        "disabled_bg": "#eef2f0",
+        "check_off": "#c7d3ce",
+        "log_text": "#cad8d2",
+        "progress_bg": "#e2eae6",
+    },
+    "indigo": {
+        "text": "#1e293b",
+        "canvas": "#f5f7fa",
+        "sidebar": "#182033",
+        "sidebar_muted": "#8190aa",
+        "muted_dark": "#667085",
+        "sidebar_text": "#b8c1d4",
+        "sidebar_hover": "#242e45",
+        "primary": "#4f63d9",
+        "title": "#111827",
+        "body": "#374151",
+        "muted": "#7b879a",
+        "primary_text": "#4357c5",
+        "primary_soft": "#eef1ff",
+        "border": "#e1e5ed",
+        "soft_surface": "#f7f8fd",
+        "soft_border": "#d5dbf4",
+        "hover_border": "#b9c3f1",
+        "hover_surface": "#fbfcff",
+        "result_hover": "#f6f7fd",
+        "result_hover_border": "#bec7ef",
+        "control_border": "#d8dde7",
+        "primary_button_soft": "#f3f5ff",
+        "primary_hover": "#3f50b8",
+        "primary_soft_hover": "#e8ecff",
+        "control_hover_border": "#aab6e8",
+        "ghost_hover": "#eef0f5",
+        "disabled_text": "#9aa4b2",
+        "disabled_bg": "#f0f2f5",
+        "check_off": "#cbd2de",
+        "log_text": "#cbd5e1",
+        "progress_bg": "#e6e9f0",
+    },
+}
+STYLE_COLOR_TOKENS = {
+    "#172033": "text",
+    "#f6f7fb": "canvas",
+    "#111827": "sidebar",
+    "#7f8ca3": "sidebar_muted",
+    "#667085": "muted_dark",
+    "#aeb8ca": "sidebar_text",
+    "#1e293b": "sidebar_hover",
+    "#2f5bea": "primary",
+    "#101828": "title",
+    "#344054": "body",
+    "#7a8699": "muted",
+    "#3157d5": "primary_text",
+    "#edf2ff": "primary_soft",
+    "#e5e8ef": "border",
+    "#f8faff": "soft_surface",
+    "#cdd7fb": "soft_border",
+    "#aebcf3": "hover_border",
+    "#fbfcff": "hover_surface",
+    "#f7f9ff": "result_hover",
+    "#b8c5f4": "result_hover_border",
+    "#d7dce5": "control_border",
+    "#f4f7ff": "primary_button_soft",
+    "#244ac7": "primary_hover",
+    "#e9efff": "primary_soft_hover",
+    "#9eafe9": "control_hover_border",
+    "#eef1f6": "ghost_hover",
+    "#98a2b3": "disabled_text",
+    "#f0f2f5": "disabled_bg",
+    "#cbd2de": "check_off",
+    "#cbd5e1": "log_text",
+    "#e8ebf1": "progress_bg",
+}
+
+
+def normalize_theme_name(value: str) -> str:
+    normalized = value.strip().lower()
+    return normalized if normalized in THEME_PALETTES else DEFAULT_THEME
+
+
+def theme_palette(theme_name: str) -> dict[str, str]:
+    return THEME_PALETTES[normalize_theme_name(theme_name)]
+
+
+def build_app_style(theme_name: str) -> str:
+    style = APP_STYLE
+    palette = theme_palette(theme_name)
+    for color, token in STYLE_COLOR_TOKENS.items():
+        style = style.replace(color, f"__THEME_{token.upper()}__")
+    for token, color in palette.items():
+        style = style.replace(f"__THEME_{token.upper()}__", color)
+    return style
+
+
+def theme_name_from_config(path: Path) -> str:
+    parser = read_ini(path)
+    return normalize_theme_name(parser.get("ui", "theme", fallback=DEFAULT_THEME))
+
+
+def icon_resource_path(name: str) -> Path:
+    resource_name = f"icon/sidebar/{name}.svg"
+    path = bundled_resource(resource_name)
+    if path is not None:
+        return path
+    return Path(__file__).resolve().parents[2] / resource_name
+
+
+def brand_icon_path() -> Path:
+    resource_name = "icon/cover-v4.png"
+    path = bundled_resource(resource_name)
+    if path is not None:
+        return path
+    return Path(__file__).resolve().parents[2] / resource_name
+
+
+def themed_svg_pixmap(name: str, color: str, size: QSize) -> QPixmap:
+    path = icon_resource_path(name)
+    if not path.is_file():
+        return QPixmap()
+    svg_text = path.read_text(encoding="utf-8")
+    svg_text = re.sub(
+        r'stroke="#[0-9A-Fa-f]{6}"',
+        f'stroke="{color}"',
+        svg_text,
+    )
+    svg_text = re.sub(r'stroke-width="[^"]+"', 'stroke-width="2"', svg_text)
+    renderer = QSvgRenderer(QByteArray(svg_text.encode("utf-8")))
+    if not renderer.isValid():
+        return QPixmap()
+
+    app = QApplication.instance()
+    screen = app.primaryScreen() if app is not None else None
+    device_pixel_ratio = max(1.0, float(screen.devicePixelRatio()) if screen else 1.0)
+    pixel_size = QSize(
+        max(1, round(size.width() * device_pixel_ratio)),
+        max(1, round(size.height() * device_pixel_ratio)),
+    )
+    pixmap = QPixmap(pixel_size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    renderer.render(
+        painter,
+        QRectF(0, 0, pixel_size.width(), pixel_size.height()),
+    )
+    painter.end()
+    pixmap.setDevicePixelRatio(device_pixel_ratio)
+    return pixmap
+
+
+def themed_card_icon(name: str, palette: dict[str, str], size: QSize) -> QIcon:
+    return QIcon(themed_svg_pixmap(name, palette["primary"], size))
+
+
+def themed_navigation_icon(name: str, palette: dict[str, str]) -> QIcon:
+    icon = QIcon()
+    size = QSize(18, 18)
+    default_pixmap = themed_svg_pixmap(name, palette["sidebar_text"], size)
+    active_pixmap = themed_svg_pixmap(name, "#ffffff", size)
+    icon.addPixmap(default_pixmap, QIcon.Mode.Normal, QIcon.State.Off)
+    icon.addPixmap(active_pixmap, QIcon.Mode.Normal, QIcon.State.On)
+    icon.addPixmap(active_pixmap, QIcon.Mode.Active, QIcon.State.Off)
+    icon.addPixmap(active_pixmap, QIcon.Mode.Active, QIcon.State.On)
+    return icon
 
 
 class TaskCancelled(Exception):
@@ -342,33 +562,58 @@ class PageHeader(QWidget):
 class HomeCard(QFrame):
     clicked = Signal()
 
-    def __init__(self, icon: str, title: str, description: str, accent: str) -> None:
+    def __init__(
+        self,
+        icon_name: str,
+        title: str,
+        description: str,
+        accent: str,
+        featured: bool = False,
+    ) -> None:
         super().__init__()
-        self.setObjectName("homeCard")
+        self.icon_name = icon_name
+        self.featured = featured
+        self.setObjectName("homeFeaturedCard" if featured else "homeCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(165)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(10)
-        top = QHBoxLayout()
-        icon_label = QLabel(icon)
-        icon_label.setObjectName("cardIcon")
-        icon_label.setFixedSize(38, 34)
+        self.setMinimumHeight(132)
+        self.setMaximumHeight(146)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(18, 17, 18, 17)
+        layout.setSpacing(15)
+        self.icon_label = QLabel()
+        self.icon_label.setObjectName("cardIcon")
+        self.icon_label.setFixedSize(44, 44)
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignTop)
+
+        content = QVBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(7)
+        heading = QHBoxLayout()
+        heading.setSpacing(8)
+        title_label = QLabel(title)
+        title_label.setObjectName("featuredCardTitle" if featured else "cardTitle")
         badge = QLabel(accent)
         badge.setObjectName("statusPill")
         badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        top.addWidget(icon_label)
-        top.addStretch()
-        top.addWidget(badge)
-        title_label = QLabel(title)
-        title_label.setObjectName("cardTitle")
+        heading.addWidget(title_label)
+        heading.addWidget(badge)
+        heading.addStretch()
         description_label = QLabel(description)
-        description_label.setObjectName("muted")
+        description_label.setObjectName("cardDescription")
         description_label.setWordWrap(True)
-        layout.addLayout(top)
-        layout.addWidget(title_label)
-        layout.addWidget(description_label)
-        layout.addStretch()
+        action_label = QLabel("打开功能  →")
+        action_label.setObjectName("cardAction")
+        content.addLayout(heading)
+        content.addWidget(description_label)
+        content.addStretch()
+        content.addWidget(action_label)
+        layout.addLayout(content, 1)
+        self.apply_theme(theme_palette(DEFAULT_THEME))
+
+    def apply_theme(self, palette: dict[str, str]) -> None:
+        icon = themed_card_icon(self.icon_name, palette, QSize(22, 22))
+        self.icon_label.setPixmap(icon.pixmap(QSize(22, 22)))
 
     def mousePressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         if event.button() == Qt.MouseButton.LeftButton:
@@ -396,16 +641,18 @@ class HomePage(QWidget):
         layout.addSpacing(22)
 
         self.grid = QGridLayout()
-        self.grid.setHorizontalSpacing(16)
-        self.grid.setVerticalSpacing(16)
+        self.grid.setHorizontalSpacing(14)
+        self.grid.setVerticalSpacing(14)
+        for column in range(3):
+            self.grid.setColumnStretch(column, 1)
         self.cards = [
-            HomeCard("▦", "Excel 增行", "批量处理带颜色标签的工作表。", "本地处理"),
-            HomeCard("⇄", "订单差异比对", "分别执行代收与代付对账并生成 HTML 汇总。", "生成报告"),
-            HomeCard("⇩", "订单报表下载", "登录后台并下载指定日期的订单报表。", "需要网络"),
-            HomeCard("⊞", "增卡", "根据模板批量创建卡号工作表。", "付费功能"),
-            HomeCard("⇥", "提取B2B", "批量提取并写入 B2B 交易数据。", "付费功能"),
-            HomeCard("⌕", "对账结果", "按生成日期查看代收与代付对账报告。", "历史记录"),
-            HomeCard("⚙", "配置管理", "可视化维护全局配置和功能参数。", "INI 配置"),
+            HomeCard("sheet-add", "Excel 增行", "批量处理带颜色标签的工作表。", "本地处理"),
+            HomeCard("compare", "订单差异比对", "分别执行代收与代付对账并生成 HTML 汇总。", "核心功能", featured=True),
+            HomeCard("download", "订单报表下载", "登录后台并下载指定日期的订单报表。", "需要网络"),
+            HomeCard("card-add", "增卡", "根据模板批量创建卡号工作表。", "付费功能"),
+            HomeCard("extract", "提取B2B", "批量提取并写入 B2B 交易数据。", "付费功能"),
+            HomeCard("results", "对账结果", "按生成日期查看代收与代付对账报告。", "历史记录"),
+            HomeCard("settings", "配置管理", "可视化维护全局配置和功能参数。", "INI 配置"),
         ]
         for index, card in enumerate(self.cards):
             card.clicked.connect(lambda checked=False, page=index + 1: self.page_requested.emit(page))
@@ -425,8 +672,26 @@ class HomePage(QWidget):
         for card in self.cards:
             self.grid.removeWidget(card)
             card.setVisible(card in visible_cards)
+        if order_diff:
+            self.grid.addWidget(self.cards[1], 0, 0, 1, 2)
+            self.grid.addWidget(self.cards[0], 0, 2)
+            utility_cards = [
+                card
+                for card in self.cards[2:5]
+                if card in visible_cards
+            ]
+            for column, card in enumerate(utility_cards):
+                self.grid.addWidget(card, 1, column)
+            result_row = 2 if utility_cards else 1
+            self.grid.addWidget(self.cards[5], result_row, 0, 1, 2)
+            self.grid.addWidget(self.cards[6], result_row, 2)
+            return
         for index, card in enumerate(visible_cards):
-            self.grid.addWidget(card, index // 2, index % 2)
+            self.grid.addWidget(card, index // 3, index % 3)
+
+    def apply_theme(self, palette: dict[str, str]) -> None:
+        for card in self.cards:
+            card.apply_theme(palette)
 
 
 class FieldBlock(QWidget):
@@ -459,7 +724,7 @@ class TaskPage(QWidget):
         self.output_path: Path | None = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(40, 32, 40, 30)
-        outer.setSpacing(18)
+        outer.setSpacing(14)
         outer.addWidget(PageHeader(eyebrow, title, description))
 
         self.form_panel = QFrame()
@@ -469,14 +734,15 @@ class TaskPage(QWidget):
         self.form.setSpacing(14)
         if scroll_form:
             self.form.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
-            form_scroll = QScrollArea()
-            form_scroll.setWidgetResizable(True)
-            form_scroll.setHorizontalScrollBarPolicy(
+            self.form_scroll = QScrollArea()
+            self.form_scroll.setWidgetResizable(True)
+            self.form_scroll.setHorizontalScrollBarPolicy(
                 Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             )
-            form_scroll.setWidget(self.form_panel)
-            outer.addWidget(form_scroll, 1)
+            self.form_scroll.setWidget(self.form_panel)
+            outer.addWidget(self.form_scroll, 1)
         else:
+            self.form_scroll = None
             outer.addWidget(self.form_panel)
 
         actions = QHBoxLayout()
@@ -514,10 +780,12 @@ class TaskPage(QWidget):
         outer.addWidget(self.log_toggle)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setMinimumHeight(150)
+        self.log_view.setMinimumHeight(96)
+        self.log_view.setMaximumHeight(120)
         self.log_view.setVisible(False)
-        outer.addWidget(self.log_view, 1)
-        outer.addStretch()
+        outer.addWidget(self.log_view)
+        if not scroll_form:
+            outer.addStretch()
 
     def add_field(self, title: str, control: QWidget, hint: str = "") -> None:
         self.form.addWidget(FieldBlock(title, control, hint))
@@ -530,8 +798,6 @@ class TaskPage(QWidget):
         self.cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
         self.status_label.setText("正在执行…")
-        self.log_toggle.setChecked(True)
-        self.toggle_log(True)
         self.log_view.appendPlainText("任务已开始")
         worker = TaskWorker(task)
         self.worker = worker
@@ -564,6 +830,8 @@ class TaskPage(QWidget):
     def task_failed(self, details: str) -> None:
         self.log_view.appendPlainText(details)
         self.status_label.setText("执行失败，请查看日志")
+        self.log_toggle.setChecked(True)
+        self.toggle_log(True)
         last_line = next((line for line in reversed(details.splitlines()) if line.strip()), "执行失败")
         QMessageBox.critical(self, "执行失败", last_line)
 
@@ -773,6 +1041,7 @@ class DiffPage(TaskPage):
         collection_layout.addWidget(FieldBlock("处理方式", self.mode_combo))
         collection_layout.addWidget(self.mode_stack)
         self.mode_combo.currentIndexChanged.connect(self.mode_stack.setCurrentIndex)
+        self.mode_combo.setCurrentIndex(self.mode_combo.findData("files"))
 
         payout_panel = QWidget()
         payout_layout = QVBoxLayout(payout_panel)
@@ -781,6 +1050,9 @@ class DiffPage(TaskPage):
         self.payout_mode_combo = NoWheelComboBox()
         self.payout_mode_combo.addItem("按订单目录处理", "directory")
         self.payout_mode_combo.addItem("手动上传账单", "files")
+        self.payout_algorithm_combo = NoWheelComboBox()
+        self.payout_algorithm_combo.addItem("zee", "zee")
+        self.payout_algorithm_combo.addItem("finerBit", "finerbit")
         self.payout_mode_stack = QStackedWidget()
 
         payout_directory_panel = QWidget()
@@ -809,6 +1081,11 @@ class DiffPage(TaskPage):
         self.payout_backend_picker = PathPicker(
             "file", file_filter="Excel (*.xlsx)"
         )
+        self.payout_collection_upstream_picker = PathPicker(
+            "file",
+            file_filter="finerBit上游代收账单 (*.csv *.xlsx)",
+            allowed_suffixes=(".csv", ".xlsx"),
+        )
         payout_manual_layout.addWidget(
             FieldBlock(
                 "代付上游账单（必传）",
@@ -823,14 +1100,34 @@ class DiffPage(TaskPage):
                 "需包含 transactionId、交易状态、付款金额、手续费和支付方式名称。",
             )
         )
+        self.payout_collection_upstream_field = FieldBlock(
+            "上游代收账单（必传）",
+            self.payout_collection_upstream_picker,
+            "Transaction Details 文件；支持拖拽或点击浏览上传 .csv/.xlsx。",
+        )
+        payout_manual_layout.addWidget(self.payout_collection_upstream_field)
 
         self.payout_mode_stack.addWidget(payout_directory_panel)
         self.payout_mode_stack.addWidget(payout_manual_panel)
         payout_layout.addWidget(FieldBlock("处理方式", self.payout_mode_combo))
+        payout_layout.addWidget(
+            FieldBlock(
+                "分组算法",
+                self.payout_algorithm_combo,
+                "zee 使用现有代付规则；finerBit 使用独立费率配置。",
+            )
+        )
         payout_layout.addWidget(self.payout_mode_stack)
         self.payout_mode_combo.currentIndexChanged.connect(
             self.payout_mode_stack.setCurrentIndex
         )
+        self.payout_mode_combo.setCurrentIndex(
+            self.payout_mode_combo.findData("files")
+        )
+        self.payout_algorithm_combo.currentIndexChanged.connect(
+            self.update_payout_algorithm_fields
+        )
+        self.update_payout_algorithm_fields()
 
         self.business_stack.addWidget(collection_panel)
         self.business_stack.addWidget(payout_panel)
@@ -882,6 +1179,14 @@ class DiffPage(TaskPage):
         )
 
     def run_payout(self) -> None:
+        algorithm = str(self.payout_algorithm_combo.currentData())
+        if algorithm == "finerbit" and self.payout_mode_combo.currentData() == "directory":
+            QMessageBox.warning(
+                self,
+                "finerBit 请使用手动上传",
+                "finerBit 需要额外上传 Transaction Details 上游代收账单。",
+            )
+            return
         if self.payout_mode_combo.currentData() == "directory":
             self.start_task(
                 lambda log: run_payout_diff_task(
@@ -892,19 +1197,31 @@ class DiffPage(TaskPage):
 
         upstream_text = self.payout_upstream_picker.edit.text().strip()
         backend_text = self.payout_backend_picker.edit.text().strip()
-        if not upstream_text or not backend_text:
+        collection_text = self.payout_collection_upstream_picker.edit.text().strip()
+        if not upstream_text or not backend_text or (algorithm == "finerbit" and not collection_text):
             QMessageBox.warning(
                 self,
                 "文件未选择",
-                "请选择代付上游账单和我方付款订单。",
+                "请选择代付上游账单、我方付款订单"
+                + ("和上游代收账单。" if algorithm == "finerbit" else "。"),
             )
             return
         upstream_path = Path(upstream_text).expanduser()
         backend_path = Path(backend_text).expanduser()
+        collection_path = Path(collection_text).expanduser() if collection_text else None
         self.start_task(
             lambda log: run_payout_diff_files_task(
-                upstream_path, backend_path, log
+                upstream_path,
+                backend_path,
+                algorithm,
+                collection_path,
+                log,
             )
+        )
+
+    def update_payout_algorithm_fields(self, _index: int = -1) -> None:
+        self.payout_collection_upstream_field.setVisible(
+            self.payout_algorithm_combo.currentData() == "finerbit"
         )
 
     def load_group_config(self) -> None:
@@ -1053,11 +1370,55 @@ class AddB2BPage(TaskPage):
         )
 
 
+class ResultRow(QFrame):
+    view_requested = Signal(object)
+
+    def __init__(
+        self,
+        generated_at: datetime,
+        result_type: str,
+        display_name: str,
+        path: Path,
+        palette: dict[str, str],
+    ) -> None:
+        super().__init__()
+        self.setObjectName("resultRow")
+        self.setToolTip(path.name)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(18, 14, 16, 14)
+        layout.setSpacing(15)
+
+        badge = QLabel(result_type)
+        badge.setObjectName(
+            "resultBadgePayout" if result_type == "代付" else "resultBadgeCollection"
+        )
+        badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        layout.addWidget(badge)
+
+        details = QVBoxLayout()
+        details.setSpacing(4)
+        title = QLabel(display_name)
+        title.setObjectName("resultTitle")
+        generated_label = QLabel(f"生成时间  {generated_at:%Y-%m-%d %H:%M:%S}")
+        generated_label.setObjectName("muted")
+        details.addWidget(title)
+        details.addWidget(generated_label)
+        layout.addLayout(details, 1)
+
+        view_button = QPushButton("查看")
+        view_button.setObjectName("resultViewButton")
+        view_button.setIcon(themed_card_icon("results", palette, QSize(16, 16)))
+        view_button.setIconSize(QSize(16, 16))
+        view_button.clicked.connect(lambda: self.view_requested.emit(path))
+        layout.addWidget(view_button)
+
+
 class ResultsPage(QWidget):
     RESULT_TIMESTAMP_PATTERN = re.compile(r"_(\d{8})_(\d{6})$")
 
     def __init__(self) -> None:
         super().__init__()
+        self.palette = theme_palette(DEFAULT_THEME)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(40, 32, 40, 30)
         outer.setSpacing(18)
@@ -1073,47 +1434,54 @@ class ResultsPage(QWidget):
         filter_panel.setObjectName("panel")
         filter_layout = QHBoxLayout(filter_panel)
         filter_layout.setContentsMargins(20, 16, 20, 16)
-        filter_layout.setSpacing(10)
-        filter_layout.addWidget(QLabel("生成日期"))
-        self.filter_combo = NoWheelComboBox()
-        self.filter_combo.addItems(["全部", "今天", "指定日期"])
-        self.filter_combo.setFixedWidth(130)
-        filter_layout.addWidget(self.filter_combo)
+        filter_layout.setSpacing(12)
+        filter_label = QLabel("日期筛选")
+        filter_label.setObjectName("fieldLabel")
+        filter_layout.addWidget(filter_label)
         self.date_picker = DatePicker(date.today())
         self.date_picker.setFixedWidth(280)
-        self.date_picker.setVisible(False)
         filter_layout.addWidget(self.date_picker)
-        refresh_button = QPushButton("刷新")
-        refresh_button.clicked.connect(self.refresh_results)
-        filter_layout.addWidget(refresh_button)
+        search_button = QPushButton("搜索")
+        search_button.setObjectName("primary")
+        search_button.clicked.connect(self.refresh_results)
+        filter_layout.addWidget(search_button)
+        self.cleanup_button = QPushButton("清理历史结果")
+        self.cleanup_button.clicked.connect(self.clean_historical_results)
+        filter_layout.addWidget(self.cleanup_button)
         filter_layout.addStretch()
-        self.count_label = QLabel()
-        self.count_label.setObjectName("muted")
-        filter_layout.addWidget(self.count_label)
         outer.addWidget(filter_panel)
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["类型", "生成时间", "结果文件", "操作"])
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(44)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.cellDoubleClicked.connect(self.open_row)
-        outer.addWidget(self.table, 1)
+        results_panel = QFrame()
+        results_panel.setObjectName("panel")
+        results_layout = QVBoxLayout(results_panel)
+        results_layout.setContentsMargins(20, 18, 20, 20)
+        results_layout.setSpacing(14)
+        results_header = QHBoxLayout()
+        results_title = QLabel("搜索结果")
+        results_title.setObjectName("sectionTitle")
+        self.count_label = QLabel()
+        self.count_label.setObjectName("muted")
+        results_header.addWidget(results_title)
+        results_header.addStretch()
+        results_header.addWidget(self.count_label)
+        results_layout.addLayout(results_header)
 
-        self.filter_combo.currentIndexChanged.connect(self.filter_changed)
-        self.date_picker.date_changed.connect(lambda _value: self.refresh_results())
-        self.refresh_results()
+        result_scroll = QScrollArea()
+        result_scroll.setObjectName("resultScroll")
+        result_scroll.setWidgetResizable(True)
+        result_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        result_list = QWidget()
+        result_list.setObjectName("resultList")
+        self.result_list_layout = QVBoxLayout(result_list)
+        self.result_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.result_list_layout.setSpacing(10)
+        self.result_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        result_scroll.setWidget(result_list)
+        results_layout.addWidget(result_scroll, 1)
+        outer.addWidget(results_panel, 1)
 
-    def filter_changed(self, index: int) -> None:
-        self.date_picker.setVisible(index == 2)
         self.refresh_results()
 
     def result_entries(self) -> list[tuple[datetime, str, Path]]:
@@ -1136,42 +1504,111 @@ class ResultsPage(QWidget):
         entries.sort(key=lambda entry: entry[0], reverse=True)
         return entries
 
-    def selected_date(self) -> date | None:
-        if self.filter_combo.currentIndex() == 0:
-            return None
-        if self.filter_combo.currentIndex() == 1:
-            return date.today()
-        return self.date_picker.value()
+    def historical_result_entries(
+        self, reference_date: date | None = None
+    ) -> list[tuple[datetime, str, Path]]:
+        cutoff_date = (reference_date or date.today()) - timedelta(days=7)
+        return [
+            entry
+            for entry in self.result_entries()
+            if entry[0].date() < cutoff_date
+        ]
+
+    def clean_historical_results(self) -> None:
+        entries = self.historical_result_entries()
+        if not entries:
+            QMessageBox.information(
+                self,
+                "无需清理",
+                "暂无七天前的对账结果需要清理。",
+            )
+            return
+
+        cutoff_date = date.today() - timedelta(days=7)
+        answer = QMessageBox.question(
+            self,
+            "确认清理历史结果",
+            f"将清理七天前的对账结果（{cutoff_date:%Y-%m-%d} 之前），"
+            f"共 {len(entries)} 个文件。\n\n删除后无法恢复，是否确定清理？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        deleted_count = 0
+        failed_paths: list[Path] = []
+        for _generated_at, _result_type, path in entries:
+            try:
+                path.unlink()
+                deleted_count += 1
+            except OSError:
+                failed_paths.append(path)
+        self.refresh_results()
+
+        if failed_paths:
+            QMessageBox.warning(
+                self,
+                "部分结果清理失败",
+                f"已清理 {deleted_count} 个结果，{len(failed_paths)} 个文件清理失败。",
+            )
+            return
+        QMessageBox.information(
+            self,
+            "清理完成",
+            f"已清理 {deleted_count} 个七天前的对账结果。",
+        )
 
     def refresh_results(self) -> None:
-        selected_date = self.selected_date()
+        selected_date = self.date_picker.value()
         entries = [
             entry
             for entry in self.result_entries()
-            if selected_date is None or entry[0].date() == selected_date
+            if entry[0].date() == selected_date
         ]
-        self.table.setRowCount(0)
-        for generated_at, result_type, path in entries:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            type_item = QTableWidgetItem(result_type)
-            type_item.setData(Qt.ItemDataRole.UserRole, str(path))
-            self.table.setItem(row, 0, type_item)
-            self.table.setItem(
-                row, 1, QTableWidgetItem(generated_at.strftime("%Y-%m-%d %H:%M:%S"))
-            )
-            self.table.setItem(row, 2, QTableWidgetItem(path.name))
-            open_button = QPushButton("打开")
-            open_button.clicked.connect(
-                lambda checked=False, target=path: self.open_path(target)
-            )
-            self.table.setCellWidget(row, 3, open_button)
-        self.count_label.setText(f"共 {len(entries)} 条")
+        while self.result_list_layout.count():
+            item = self.result_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
 
-    def open_row(self, row: int, _column: int) -> None:
-        item = self.table.item(row, 0)
-        if item is not None:
-            self.open_path(Path(str(item.data(Qt.ItemDataRole.UserRole))))
+        for generated_at, result_type, path in entries:
+            row = ResultRow(
+                generated_at,
+                result_type,
+                self.display_name(path, result_type),
+                path,
+                self.palette,
+            )
+            row.view_requested.connect(self.open_path)
+            self.result_list_layout.addWidget(row)
+        if not entries:
+            empty_state = QFrame()
+            empty_state.setObjectName("emptyResult")
+            empty_state.setMinimumHeight(150)
+            empty_layout = QVBoxLayout(empty_state)
+            empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_title = QLabel("当前日期暂无对账结果")
+            empty_title.setObjectName("resultTitle")
+            empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_hint = QLabel("请选择其他日期后点击搜索")
+            empty_hint.setObjectName("muted")
+            empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_layout.addWidget(empty_title)
+            empty_layout.addWidget(empty_hint)
+            self.result_list_layout.addWidget(empty_state)
+        self.count_label.setText(f"找到 {len(entries)} 条结果")
+
+    def display_name(self, path: Path, result_type: str) -> str:
+        prefix = "payout_order_diff_" if result_type == "代付" else "order_diff_"
+        name = path.stem.removeprefix(prefix)
+        name = self.RESULT_TIMESTAMP_PATTERN.sub("", name).removeprefix("batch_")
+        group_name = name.strip("_- ").replace("_", " · ") or "未命名"
+        return f"{group_name} 对账结果"
+
+    def apply_theme(self, palette: dict[str, str]) -> None:
+        self.palette = palette
+        self.refresh_results()
 
     def open_path(self, path: Path) -> None:
         if not path.is_file():
@@ -1207,6 +1644,7 @@ class SettingSection(QFrame):
 
 class SettingsPage(QWidget):
     license_changed = Signal(object)
+    theme_changed = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -1235,11 +1673,6 @@ class SettingsPage(QWidget):
         license_header.addWidget(license_title)
         license_header.addStretch()
         license_header.addWidget(self.license_status)
-        license_description = QLabel(
-            "验证成功后按许可证开放订单比对、订单下载、增卡和提取B2B；"
-            "密钥仅保存在本机，不写入 config.ini。"
-        )
-        license_description.setObjectName("fieldHint")
         self.license_input = QLineEdit()
         self.license_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.license_input.setPlaceholderText("粘贴 AX1 开头的授权密钥")
@@ -1256,7 +1689,6 @@ class SettingsPage(QWidget):
         self.license_detail.setObjectName("fieldHint")
         self.license_detail.setWordWrap(True)
         license_layout.addLayout(license_header)
-        license_layout.addWidget(license_description)
         license_layout.addLayout(license_actions)
         license_layout.addWidget(self.license_detail)
         outer.addWidget(license_panel)
@@ -1271,6 +1703,17 @@ class SettingsPage(QWidget):
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 8, 0)
         content_layout.setSpacing(14)
+
+        appearance_section = SettingSection(
+            "外观设置",
+            "切换后立即预览；点击保存配置后，下次启动会继续使用当前主题。",
+        )
+        self.theme_combo = NoWheelComboBox()
+        for theme_name, label in THEME_LABELS.items():
+            self.theme_combo.addItem(label, theme_name)
+        self.theme_combo.currentIndexChanged.connect(self.emit_theme_change)
+        appearance_section.add_setting("界面主题", self.theme_combo)
+        self.controls[("ui", "theme")] = self.theme_combo
 
         fill_section = SettingSection("Excel 增行", "控制批处理方式和默认工作簿。")
         self.add_text(fill_section, "目标日期", "fill", "target_date", "留空时使用前一天")
@@ -1293,6 +1736,7 @@ class SettingsPage(QWidget):
             "easypaisa_rate_percent",
             0,
             100,
+            4,
         )
         self.add_decimal(
             diff_section,
@@ -1301,6 +1745,30 @@ class SettingsPage(QWidget):
             "jazzcash_rate_percent",
             0,
             100,
+            2.3,
+        )
+
+        payout_finerbit_section = SettingSection(
+            "代付 finerBit 费率",
+            "费率填写百分值，例如填写 1.3 表示 1.3%。",
+        )
+        self.add_decimal(
+            payout_finerbit_section,
+            "Easypaisa 费率",
+            "diff_orders",
+            "payout_finerbit_easypaisa_rate_percent",
+            0,
+            100,
+            1.3,
+        )
+        self.add_decimal(
+            payout_finerbit_section,
+            "JazzCash 费率",
+            "diff_orders",
+            "payout_finerbit_jazzcash_rate_percent",
+            0,
+            100,
+            1.25,
         )
 
         fetch_section = SettingSection("订单下载", "接口与下载设置。登录凭据继续保存在 loginConf.ini。")
@@ -1317,8 +1785,10 @@ class SettingsPage(QWidget):
         self.add_text(fetch_section, "Referer", "fetch_orders", "referer")
         self.add_text(fetch_section, "User-Agent", "fetch_orders", "user_agent")
 
+        content_layout.addWidget(appearance_section)
         content_layout.addWidget(fill_section)
         content_layout.addWidget(diff_section)
+        content_layout.addWidget(payout_finerbit_section)
         content_layout.addWidget(fetch_section)
         content_layout.addStretch()
         scroll.setWidget(content)
@@ -1369,9 +1839,11 @@ class SettingsPage(QWidget):
         option: str,
         minimum: float,
         maximum: float,
+        default: float = 0,
     ) -> None:
         control = NoWheelDoubleSpinBox()
         control.setRange(minimum, maximum)
+        control.setValue(default)
         control.setDecimals(4)
         control.setSingleStep(0.1)
         control.setSuffix(" %")
@@ -1385,11 +1857,14 @@ class SettingsPage(QWidget):
             if isinstance(control, QLineEdit):
                 control.setText(value)
             elif isinstance(control, QDoubleSpinBox):
-                control.setValue(float(value or control.minimum()))
+                control.setValue(float(value or control.value()))
             elif isinstance(control, QSpinBox):
                 control.setValue(int(value or control.minimum()))
             elif isinstance(control, QCheckBox):
                 control.setChecked(value.strip().lower() in {"1", "yes", "true", "on", "y"})
+            elif isinstance(control, QComboBox):
+                selected_index = control.findData(normalize_theme_name(value))
+                control.setCurrentIndex(max(selected_index, 0))
 
     def save_values(self) -> None:
         updates: dict[str, dict[str, str]] = {}
@@ -1400,11 +1875,16 @@ class SettingsPage(QWidget):
                 value = f"{control.value():.4f}".rstrip("0").rstrip(".")
             elif isinstance(control, QSpinBox):
                 value = str(control.value())
+            elif isinstance(control, QComboBox):
+                value = str(control.currentData())
             else:
                 value = "true" if isinstance(control, QCheckBox) and control.isChecked() else "false"
             updates.setdefault(section, {})[option] = value
         update_ini(self.config_path, updates)
         QMessageBox.information(self, "配置已保存", f"已更新 {self.config_path}")
+
+    def emit_theme_change(self, _index: int = -1) -> None:
+        self.theme_changed.emit(str(self.theme_combo.currentData()))
 
     def validate_and_install_license(self) -> None:
         info = install_license(self.license_input.text())
@@ -1433,23 +1913,12 @@ class SettingsPage(QWidget):
         if not current.valid:
             self.license_detail.setText(f"{current.message} · 密钥文件：{license_file_path()}")
             return
-        feature_names: list[str] = []
-        if current.allows(FEATURE_ORDER_DIFF):
-            feature_names.append("订单比对")
-        if current.allows(FEATURE_FETCH_ORDERS):
-            feature_names.append("订单下载")
-        if current.allows(FEATURE_ADD_CARDS):
-            feature_names.append("增卡")
-        if current.allows(FEATURE_ADD_B2B):
-            feature_names.append("提取B2B")
         expiration = (
             current.expires_at.strftime("%Y-%m-%d %H:%M UTC")
             if current.expires_at
             else "永久"
         )
-        self.license_detail.setText(
-            f"许可证：{current.license_id} · 功能：{', '.join(feature_names) or '无'} · 到期：{expiration}"
-        )
+        self.license_detail.setText(f"到期时间：{expiration}")
 
 
 class Sidebar(QFrame):
@@ -1462,31 +1931,50 @@ class Sidebar(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 26, 18, 20)
         layout.setSpacing(8)
+
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(10)
+        brand_icon = QLabel()
+        brand_icon.setFixedSize(36, 36)
+        icon_path = brand_icon_path()
+        if icon_path.is_file():
+            brand_icon.setPixmap(QIcon(str(icon_path)).pixmap(QSize(36, 36)))
         brand = QLabel("SmartSheet Desk")
         brand.setObjectName("sidebarBrand")
-        caption = QLabel("DESKTOP WORKSPACE")
-        caption.setObjectName("sidebarCaption")
-        layout.addWidget(brand)
-        layout.addWidget(caption)
+        caption = QLabel("SMART DATA OPERATIONS")
+        caption.setObjectName("sidebarBrandCaption")
+        brand_text = QVBoxLayout()
+        brand_text.setContentsMargins(0, 0, 0, 0)
+        brand_text.setSpacing(1)
+        brand_text.addWidget(brand)
+        brand_text.addWidget(caption)
+        brand_row.addWidget(brand_icon)
+        brand_row.addLayout(brand_text, 1)
+        layout.addLayout(brand_row)
         layout.addSpacing(28)
         section = QLabel("工作区")
         section.setObjectName("navSection")
         layout.addWidget(section)
-        labels = [
-            "工作台",
-            "Excel 增行",
-            "订单比对",
-            "订单下载",
-            "增卡",
-            "提取B2B",
-            "对账结果",
-            "配置管理",
+        navigation = [
+            ("工作台", "dashboard"),
+            ("Excel 增行", "sheet-add"),
+            ("订单比对", "compare"),
+            ("订单下载", "download"),
+            ("增卡", "card-add"),
+            ("提取B2B", "extract"),
+            ("对账结果", "results"),
+            ("配置管理", "settings"),
         ]
+        self.icon_names = [icon_name for _label, icon_name in navigation]
         self.buttons: list[QPushButton] = []
-        for index, label in enumerate(labels):
+        for index, (label, icon_name) in enumerate(navigation):
             button = QPushButton(label)
             button.setObjectName("navButton")
             button.setCheckable(True)
+            button.setIcon(
+                themed_navigation_icon(icon_name, theme_palette(DEFAULT_THEME))
+            )
+            button.setIconSize(QSize(18, 18))
             button.clicked.connect(lambda checked=False, page=index: self.page_requested.emit(page))
             layout.addWidget(button)
             self.buttons.append(button)
@@ -1495,6 +1983,10 @@ class Sidebar(QFrame):
         footer.setObjectName("sidebarCaption")
         layout.addWidget(footer)
         self.select(0)
+
+    def apply_theme(self, palette: dict[str, str]) -> None:
+        for button, icon_name in zip(self.buttons, self.icon_names):
+            button.setIcon(themed_navigation_icon(icon_name, palette))
 
     def select(self, index: int) -> None:
         for button_index, button in enumerate(self.buttons):
@@ -1549,7 +2041,19 @@ class MainWindow(QMainWindow):
         self.sidebar.page_requested.connect(self.show_page)
         self.home_page.page_requested.connect(self.show_page)
         self.settings_page.license_changed.connect(self.apply_license)
+        self.settings_page.theme_changed.connect(self.apply_theme)
+        self.apply_theme(theme_name_from_config(self.settings_page.config_path))
         self.apply_license(load_license())
+
+    @Slot(str)
+    def apply_theme(self, theme_name: str) -> None:
+        palette = theme_palette(theme_name)
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(build_app_style(theme_name))
+        self.sidebar.apply_theme(palette)
+        self.home_page.apply_theme(palette)
+        self.results_page.apply_theme(palette)
 
     def show_page(self, index: int) -> None:
         current_license = load_license()
@@ -1596,13 +2100,13 @@ def main() -> None:
     ensure_workspace_directories()
     app = QApplication(sys.argv)
     app.setApplicationName("SmartSheet Desk")
-    icon_path = bundled_resource("icon/cover.png")
+    icon_path = bundled_resource("icon/cover-v4.png")
     if icon_path is None:
-        icon_path = Path(__file__).resolve().parents[2] / "icon" / "cover.png"
+        icon_path = Path(__file__).resolve().parents[2] / "icon" / "cover-v4.png"
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
     app.setStyle("Fusion")
-    app.setStyleSheet(APP_STYLE)
+    app.setStyleSheet(build_app_style(theme_name_from_config(editable_config_path())))
     app.setFont(QFont("", 13))
     window = MainWindow()
     window.show()
