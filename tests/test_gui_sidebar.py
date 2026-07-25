@@ -29,6 +29,14 @@ class GuiSidebarTest(unittest.TestCase):
             sidebar.brand_caption.width(), sidebar.brand_caption.sizeHint().width()
         )
 
+    def test_flow_sync_navigation_opens_flow_sync_page(self) -> None:
+        sidebar = Sidebar()
+
+        labels = [button.text() for button in sidebar.buttons]
+        flow_sync_index = labels.index("流水同步")
+
+        self.assertEqual(sidebar.page_indexes[flow_sync_index], 8)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -58,6 +58,9 @@ from autoexcel.gui_tasks import (
     run_fill_task,
     run_payout_diff_files_task,
     run_payout_diff_task,
+    run_tp_collection_sync_task,
+    run_tp_payout_sync_task,
+    run_wallet_flow_sync_task,
 )
 from autoexcel.license import (
     FEATURE_ADD_B2B,
@@ -652,10 +655,14 @@ class HomePage(QWidget):
             HomeCard("card-add", "增卡", "根据模板批量创建卡号工作表。", "付费功能"),
             HomeCard("extract", "提取B2B", "批量提取并写入 B2B 交易数据。", "付费功能"),
             HomeCard("results", "对账结果", "按生成日期查看代收与代付对账报告。", "历史记录"),
+            HomeCard("flow-sync", "流水同步", "整合 TP 代付、TP 代收和钱包流水同步。", "新模块"),
             HomeCard("settings", "配置管理", "可视化维护全局配置和功能参数。", "INI 配置"),
         ]
-        for index, card in enumerate(self.cards):
-            card.clicked.connect(lambda checked=False, page=index + 1: self.page_requested.emit(page))
+        self.card_page_indexes = (1, 2, 3, 4, 5, 6, 8, 7)
+        for card, page_index in zip(self.cards, self.card_page_indexes):
+            card.clicked.connect(
+                lambda checked=False, page=page_index: self.page_requested.emit(page)
+            )
         self.set_feature_access(False, False, False, False)
         layout.addLayout(self.grid)
         layout.addStretch()
@@ -667,7 +674,16 @@ class HomePage(QWidget):
         add_cards: bool,
         add_b2b: bool,
     ) -> None:
-        visibility = (True, order_diff, fetch_orders, add_cards, add_b2b, order_diff, True)
+        visibility = (
+            True,
+            order_diff,
+            fetch_orders,
+            add_cards,
+            add_b2b,
+            order_diff,
+            True,
+            True,
+        )
         visible_cards = [card for card, visible in zip(self.cards, visibility) if visible]
         for card in self.cards:
             self.grid.removeWidget(card)
@@ -684,7 +700,8 @@ class HomePage(QWidget):
                 self.grid.addWidget(card, 1, column)
             result_row = 2 if utility_cards else 1
             self.grid.addWidget(self.cards[5], result_row, 0, 1, 2)
-            self.grid.addWidget(self.cards[6], result_row, 2)
+            self.grid.addWidget(self.cards[7], result_row, 2)
+            self.grid.addWidget(self.cards[6], result_row + 1, 0, 1, 3)
             return
         for index, card in enumerate(visible_cards):
             self.grid.addWidget(card, index // 3, index % 3)
@@ -921,6 +938,233 @@ class PathPicker(QWidget):
             return
         self.edit.setText(str(path))
         event.acceptProposedAction()
+
+
+class FlowSyncPage(TaskPage):
+    def __init__(self) -> None:
+        super().__init__(
+            "Transaction sync",
+            "流水同步",
+            "选择流水类型并上传对应文件。",
+            scroll_form=True,
+        )
+        self.feature_names = ("TP代付同步", "TP代收同步", "钱包流水同步")
+        descriptions = (
+            "替换工作簿中的 TP代付 明细。",
+            "同步 TP 代收业务流水。",
+            "同步钱包账户流水。",
+        )
+        accents = ("可用", "可用", "可用")
+        card_container = QWidget()
+        self.grid = QGridLayout(card_container)
+        self.grid.setContentsMargins(0, 0, 0, 4)
+        self.grid.setHorizontalSpacing(14)
+        self.grid.setVerticalSpacing(14)
+        for column in range(3):
+            self.grid.setColumnStretch(column, 1)
+        self.cards: list[HomeCard] = []
+        for column, (name, description, accent) in enumerate(
+            zip(self.feature_names, descriptions, accents)
+        ):
+            card = HomeCard("flow-sync", name, description, accent)
+            if column == 0:
+                card.clicked.connect(lambda: self.select_sync_feature("payout"))
+            elif column == 1:
+                card.clicked.connect(lambda: self.select_sync_feature("collection"))
+            else:
+                card.clicked.connect(lambda: self.select_sync_feature("wallet"))
+            self.grid.addWidget(card, 0, column)
+            self.cards.append(card)
+        self.form.addWidget(card_container)
+
+        self.sync_forms = QStackedWidget()
+
+        payout_form = QWidget()
+        payout_layout = QVBoxLayout(payout_form)
+        payout_layout.setContentsMargins(0, 0, 0, 0)
+        payout_layout.setSpacing(14)
+        self.workbook_picker = PathPicker("file", file_filter="Excel (*.xlsx)")
+        self.payment_orders_picker = PathPicker("file", file_filter="Excel (*.xlsx)")
+        payout_layout.addWidget(
+            FieldBlock(
+                "工作簿",
+                self.workbook_picker,
+                "工作簿中必须包含名为“TP代付”的工作表；处理前请关闭 Excel/WPS。",
+            )
+        )
+        payout_layout.addWidget(
+            FieldBlock(
+                "付款订单 Excel",
+                self.payment_orders_picker,
+                "读取第一个工作表，并按 A 列平台订单号动态识别明细范围。",
+            )
+        )
+
+        collection_form = QWidget()
+        collection_layout = QVBoxLayout(collection_form)
+        collection_layout.setContentsMargins(0, 0, 0, 0)
+        collection_layout.setSpacing(14)
+        self.collection_workbook_picker = PathPicker(
+            "file", file_filter="Excel (*.xlsx)"
+        )
+        self.collection_orders_first_picker = PathPicker(
+            "file", file_filter="Excel (*.xlsx)"
+        )
+        self.collection_orders_second_picker = PathPicker(
+            "file", file_filter="Excel (*.xlsx)"
+        )
+        collection_layout.addWidget(
+            FieldBlock(
+                "工作簿",
+                self.collection_workbook_picker,
+                "工作簿中必须包含名为“TP代收”的工作表；处理前请关闭 Excel/WPS。",
+            )
+        )
+        collection_layout.addWidget(
+            FieldBlock(
+                "收款订单 Excel 1",
+                self.collection_orders_first_picker,
+                "可上传支付成功或部分支付文件，程序会根据 W 列自动识别。",
+            )
+        )
+        collection_layout.addWidget(
+            FieldBlock(
+                "收款订单 Excel 2",
+                self.collection_orders_second_picker,
+                "与文件 1 顺序无关；两个文件的平台订单号不能重复。",
+            )
+        )
+
+        wallet_form = QWidget()
+        wallet_layout = QVBoxLayout(wallet_form)
+        wallet_layout.setContentsMargins(0, 0, 0, 0)
+        wallet_layout.setSpacing(14)
+        self.wallet_workbook_picker = PathPicker(
+            "file", file_filter="Excel (*.xlsx)"
+        )
+        self.wallet_flow_picker = PathPicker(
+            "file", file_filter="Excel (*.xlsx)"
+        )
+        wallet_layout.addWidget(
+            FieldBlock(
+                "工作簿",
+                self.wallet_workbook_picker,
+                "工作簿中必须包含名为“长款(当日)”的工作表；处理前请关闭 Excel/WPS。",
+            )
+        )
+        wallet_layout.addWidget(
+            FieldBlock(
+                "平台钱包流水记录 Excel",
+                self.wallet_flow_picker,
+                "读取第一个工作表，第 3 行开始的全部流水都会写入。",
+            )
+        )
+        self.sync_forms.addWidget(payout_form)
+        self.sync_forms.addWidget(collection_form)
+        self.sync_forms.addWidget(wallet_form)
+        self.form.addWidget(self.sync_forms)
+
+        self.active_sync_feature = "payout"
+        self.run_button.setText("开始同步")
+        self.run_button.clicked.connect(self.run_sync)
+
+    def focus_tp_payout(self) -> None:
+        self.select_sync_feature("payout")
+
+    def select_sync_feature(self, feature: str) -> None:
+        self.active_sync_feature = feature
+        feature_indexes = {"payout": 0, "collection": 1, "wallet": 2}
+        button_labels = {
+            "payout": "开始 TP代付同步",
+            "collection": "开始 TP代收同步",
+            "wallet": "开始钱包流水同步",
+        }
+        self.sync_forms.setCurrentIndex(feature_indexes[feature])
+        self.run_button.setText(button_labels[feature])
+        if feature == "payout":
+            self.workbook_picker.edit.setFocus()
+        elif feature == "collection":
+            self.collection_workbook_picker.edit.setFocus()
+        else:
+            self.wallet_workbook_picker.edit.setFocus()
+
+    def run_sync(self) -> None:
+        if self.active_sync_feature == "collection":
+            self.run_tp_collection()
+        elif self.active_sync_feature == "wallet":
+            self.run_wallet_flow()
+        else:
+            self.run_tp_payout()
+
+    def focus_tp_collection(self) -> None:
+        self.select_sync_feature("collection")
+
+    def run_tp_payout(self) -> None:
+        workbook_text = self.workbook_picker.edit.text().strip()
+        payment_orders_text = self.payment_orders_picker.edit.text().strip()
+        if not workbook_text or not payment_orders_text:
+            QMessageBox.warning(
+                self,
+                "文件未选择",
+                "请选择工作簿和付款订单 Excel 文件。",
+            )
+            return
+        workbook = Path(workbook_text).expanduser()
+        payment_orders = Path(payment_orders_text).expanduser()
+        self.start_task(
+            lambda log: run_tp_payout_sync_task(
+                workbook,
+                payment_orders,
+                log,
+            )
+        )
+
+    def run_tp_collection(self) -> None:
+        workbook_text = self.collection_workbook_picker.edit.text().strip()
+        first_orders_text = self.collection_orders_first_picker.edit.text().strip()
+        second_orders_text = self.collection_orders_second_picker.edit.text().strip()
+        if not workbook_text or not first_orders_text or not second_orders_text:
+            QMessageBox.warning(
+                self,
+                "文件未选择",
+                "请选择工作簿和两个收款订单 Excel 文件。",
+            )
+            return
+        workbook = Path(workbook_text).expanduser()
+        first_orders = Path(first_orders_text).expanduser()
+        second_orders = Path(second_orders_text).expanduser()
+        self.start_task(
+            lambda log: run_tp_collection_sync_task(
+                workbook,
+                first_orders,
+                second_orders,
+                log,
+            )
+        )
+
+    def run_wallet_flow(self) -> None:
+        workbook_text = self.wallet_workbook_picker.edit.text().strip()
+        wallet_flow_text = self.wallet_flow_picker.edit.text().strip()
+        if not workbook_text or not wallet_flow_text:
+            QMessageBox.warning(
+                self,
+                "文件未选择",
+                "请选择工作簿和平台钱包流水记录 Excel 文件。",
+            )
+            return
+        workbook = Path(workbook_text).expanduser()
+        wallet_flow = Path(wallet_flow_text).expanduser()
+        self.start_task(
+            lambda log: run_wallet_flow_sync_task(
+                workbook,
+                wallet_flow,
+                log,
+            )
+        )
+
+    def apply_theme(self, palette: dict[str, str]) -> None:
+        for card in self.cards:
+            card.apply_theme(palette)
 
 
 class FillPage(TaskPage):
@@ -1956,18 +2200,20 @@ class Sidebar(QFrame):
         section.setObjectName("navSection")
         layout.addWidget(section)
         navigation = [
-            ("工作台", "dashboard"),
-            ("Excel 增行", "sheet-add"),
-            ("订单比对", "compare"),
-            ("订单下载", "download"),
-            ("增卡", "card-add"),
-            ("提取B2B", "extract"),
-            ("对账结果", "results"),
-            ("配置管理", "settings"),
+            ("工作台", "dashboard", 0),
+            ("Excel 增行", "sheet-add", 1),
+            ("订单比对", "compare", 2),
+            ("订单下载", "download", 3),
+            ("增卡", "card-add", 4),
+            ("提取B2B", "extract", 5),
+            ("对账结果", "results", 6),
+            ("流水同步", "flow-sync", 8),
+            ("配置管理", "settings", 7),
         ]
-        self.icon_names = [icon_name for _label, icon_name in navigation]
+        self.icon_names = [icon_name for _label, icon_name, _page in navigation]
+        self.page_indexes = [page for _label, _icon, page in navigation]
         self.buttons: list[QPushButton] = []
-        for index, (label, icon_name) in enumerate(navigation):
+        for label, icon_name, page_index in navigation:
             button = QPushButton(label)
             button.setObjectName("navButton")
             button.setCheckable(True)
@@ -1975,7 +2221,9 @@ class Sidebar(QFrame):
                 themed_navigation_icon(icon_name, theme_palette(DEFAULT_THEME))
             )
             button.setIconSize(QSize(18, 18))
-            button.clicked.connect(lambda checked=False, page=index: self.page_requested.emit(page))
+            button.clicked.connect(
+                lambda checked=False, page=page_index: self.page_requested.emit(page)
+            )
             layout.addWidget(button)
             self.buttons.append(button)
         layout.addStretch()
@@ -1989,8 +2237,8 @@ class Sidebar(QFrame):
             button.setIcon(themed_navigation_icon(icon_name, palette))
 
     def select(self, index: int) -> None:
-        for button_index, button in enumerate(self.buttons):
-            button.setChecked(button_index == index)
+        for page_index, button in zip(self.page_indexes, self.buttons):
+            button.setChecked(page_index == index)
 
     def set_feature_access(
         self,
@@ -2027,6 +2275,7 @@ class MainWindow(QMainWindow):
         self.add_b2b_page = AddB2BPage()
         self.results_page = ResultsPage()
         self.settings_page = SettingsPage()
+        self.flow_sync_page = FlowSyncPage()
         self.pages.addWidget(self.home_page)
         self.pages.addWidget(self.fill_page)
         self.pages.addWidget(self.diff_page)
@@ -2035,6 +2284,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.add_b2b_page)
         self.pages.addWidget(self.results_page)
         self.pages.addWidget(self.settings_page)
+        self.pages.addWidget(self.flow_sync_page)
         layout.addWidget(self.sidebar)
         layout.addWidget(self.pages, 1)
         self.setCentralWidget(root)
@@ -2054,6 +2304,7 @@ class MainWindow(QMainWindow):
         self.sidebar.apply_theme(palette)
         self.home_page.apply_theme(palette)
         self.results_page.apply_theme(palette)
+        self.flow_sync_page.apply_theme(palette)
 
     def show_page(self, index: int) -> None:
         current_license = load_license()

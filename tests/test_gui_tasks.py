@@ -9,10 +9,97 @@ from unittest.mock import patch
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.table import Table
 
-from autoexcel.gui_tasks import _jobs_from_directory, run_fill_task
+from autoexcel.flow_sync import TpCollectionSyncResult, TpPayoutSyncResult
+from autoexcel.gui_tasks import (
+    _jobs_from_directory,
+    run_fill_task,
+    run_tp_collection_sync_task,
+    run_tp_payout_sync_task,
+    run_wallet_flow_sync_task,
+)
 
 
 class GuiTasksTest(unittest.TestCase):
+    def test_wallet_flow_sync_task_reports_row_counts(self) -> None:
+        result = TpPayoutSyncResult(
+            removed_rows=20,
+            inserted_rows=18,
+            old_detail_end_row=21,
+            new_detail_end_row=19,
+            summary_row=30,
+            shifted_rows=0,
+        )
+
+        with patch(
+            "autoexcel.gui_tasks.flow_sync.sync_wallet_flow",
+            return_value=result,
+        ) as sync:
+            task_result = run_wallet_flow_sync_task(
+                Path("/tmp/workbook.xlsx"),
+                Path("/tmp/wallet-flow.xlsx"),
+                lambda _message: None,
+            )
+
+        sync.assert_called_once()
+        self.assertEqual(task_result.title, "钱包流水同步完成")
+        self.assertIn("清除 20 条", task_result.summary)
+        self.assertIn("写入 18 条", task_result.summary)
+
+    def test_tp_collection_sync_task_reports_status_counts(self) -> None:
+        result = TpCollectionSyncResult(
+            removed_rows=20,
+            inserted_rows=12,
+            old_detail_end_row=21,
+            new_detail_end_row=13,
+            summary_row=30,
+            shifted_rows=0,
+            successful_rows=10,
+            partial_rows=2,
+        )
+
+        with patch(
+            "autoexcel.gui_tasks.flow_sync.sync_tp_collection",
+            return_value=result,
+        ) as sync:
+            task_result = run_tp_collection_sync_task(
+                Path("/tmp/workbook.xlsx"),
+                Path("/tmp/collection-1.xlsx"),
+                Path("/tmp/collection-2.xlsx"),
+                lambda _message: None,
+            )
+
+        sync.assert_called_once()
+        self.assertEqual(task_result.title, "TP代收同步完成")
+        self.assertIn("写入 12 条", task_result.summary)
+        self.assertIn("支付成功 10 条", task_result.summary)
+        self.assertIn("部分支付 2 条", task_result.summary)
+
+    def test_tp_payout_sync_task_reports_dynamic_ranges(self) -> None:
+        result = TpPayoutSyncResult(
+            removed_rows=10,
+            inserted_rows=14,
+            old_detail_end_row=11,
+            new_detail_end_row=15,
+            summary_row=18,
+            shifted_rows=4,
+        )
+
+        with patch(
+            "autoexcel.gui_tasks.flow_sync.sync_tp_payout",
+            return_value=result,
+        ) as sync:
+            task_result = run_tp_payout_sync_task(
+                Path("/tmp/workbook.xlsx"),
+                Path("/tmp/payment-orders.xlsx"),
+                lambda _message: None,
+            )
+
+        sync.assert_called_once()
+        self.assertEqual(task_result.title, "TP代付同步完成")
+        self.assertIn("清除 10 条", task_result.summary)
+        self.assertIn("写入 14 条", task_result.summary)
+        self.assertIn("下移 4 行", task_result.summary)
+
     def test_jobs_from_directory_matches_one_pair_for_date(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
@@ -47,8 +134,12 @@ class GuiTasksTest(unittest.TestCase):
             sheet.title = "Merchant A"
             sheet.sheet_properties.tabColor = "3157D5"
             sheet["A1"] = date(2026, 7, 13)
+            sheet["J1"] = 88.25
+            sheet["J1"].number_format = "0.00"
             sheet["K1"] = 100
             sheet["M1"] = 120
+            sheet["O1"] = 42.5
+            sheet["O1"].number_format = "0.00"
             workbook.save(workbook_path)
 
             with patch(
@@ -62,6 +153,12 @@ class GuiTasksTest(unittest.TestCase):
             updated = load_workbook(workbook_path, data_only=False)
             self.assertEqual(result.title, "Excel 增行完成")
             self.assertEqual(updated["Merchant A"]["A2"].value.date(), date(2026, 7, 14))
+            self.assertEqual(updated["Merchant A"]["J1"].value, 88.25)
+            self.assertEqual(updated["Merchant A"]["O1"].value, 42.5)
+            self.assertEqual(updated["Merchant A"]["J2"].value, 0)
+            self.assertEqual(updated["Merchant A"]["J2"].number_format, "0.00")
+            self.assertIsNone(updated["Merchant A"]["O2"].value)
+            self.assertEqual(updated["Merchant A"]["O2"].number_format, "0.00")
 
     def test_fill_task_updates_b2b_and_income_after_colored_sheets(self) -> None:
         with TemporaryDirectory() as temporary_directory:

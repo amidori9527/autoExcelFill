@@ -6,7 +6,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Callable
 
-from autoexcel import add_b2b, add_cards, diff_orders, fetch_orders, payout_diff
+from autoexcel import add_b2b, add_cards, diff_orders, fetch_orders, flow_sync, payout_diff
 from autoexcel.fast_xlsx import (
     add_current_date_to_colored_sheets_fast,
     advance_summary_table_sheet_fast,
@@ -53,6 +53,59 @@ def run_add_b2b_task(
     if result.converted_negative_count:
         summary += f" 已将 {result.converted_negative_count} 行负金额转为正数。"
     return TaskResult("提取B2B完成", summary, workbook)
+
+
+def run_tp_payout_sync_task(
+    workbook: Path,
+    payment_orders: Path,
+    log: LogCallback,
+) -> TaskResult:
+    result = flow_sync.sync_tp_payout(workbook, payment_orders, progress=log)
+    summary = (
+        f"已清除 {result.removed_rows} 条历史明细，"
+        f"写入 {result.inserted_rows} 条付款订单。"
+    )
+    if result.shifted_rows:
+        summary += f" 汇总区已下移 {result.shifted_rows} 行。"
+    return TaskResult("TP代付同步完成", summary, workbook)
+
+
+def run_tp_collection_sync_task(
+    workbook: Path,
+    first_collection_orders: Path,
+    second_collection_orders: Path,
+    log: LogCallback,
+) -> TaskResult:
+    result = flow_sync.sync_tp_collection(
+        workbook,
+        first_collection_orders,
+        second_collection_orders,
+        progress=log,
+    )
+    summary = (
+        f"已清除 {result.removed_rows} 条历史明细，"
+        f"写入 {result.inserted_rows} 条收款订单"
+        f"（支付成功 {result.successful_rows} 条，"
+        f"部分支付 {result.partial_rows} 条）。"
+    )
+    if result.shifted_rows:
+        summary += f" 汇总区已下移 {result.shifted_rows} 行。"
+    return TaskResult("TP代收同步完成", summary, workbook)
+
+
+def run_wallet_flow_sync_task(
+    workbook: Path,
+    wallet_flow: Path,
+    log: LogCallback,
+) -> TaskResult:
+    result = flow_sync.sync_wallet_flow(workbook, wallet_flow, progress=log)
+    summary = (
+        f"已清除 {result.removed_rows} 条历史明细，"
+        f"写入 {result.inserted_rows} 条平台钱包流水。"
+    )
+    if result.shifted_rows:
+        summary += f" 汇总区已下移 {result.shifted_rows} 行。"
+    return TaskResult("钱包流水同步完成", summary, workbook)
 
 
 def run_fill_task(

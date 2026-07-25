@@ -171,6 +171,13 @@ def _set_numeric_cell_value(cell: ET.Element, value: float) -> None:
     value_node.text = str(int(value)) if float(value).is_integer() else str(value)
 
 
+def _clear_cell_value(cell: ET.Element) -> None:
+    for child in list(cell):
+        if child.tag in {_tag("f"), _tag("v"), _tag("is")}:
+            cell.remove(child)
+    cell.attrib.pop("t", None)
+
+
 def _set_formula_cell_value(
     cell: ET.Element,
     formula_text: str,
@@ -474,6 +481,8 @@ def _add_current_date_to_sheet_xml(xml_bytes: bytes, current_date: date) -> tupl
         moved_source.insert(0, date_cell)
     _set_numeric_cell_value(date_cell, current_serial)
     _repair_current_row_formulas(moved_source, value_row)
+    _set_numeric_cell_value(_ensure_cell(moved_source, "J"), 0)
+    _clear_cell_value(_ensure_cell(moved_source, "O"))
 
     insert_at = list(sheet_data).index(moved_source)
     sheet_data.insert(insert_at, value_row)

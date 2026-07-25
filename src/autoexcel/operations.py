@@ -155,6 +155,8 @@ def freeze_colored_sheets_next_day(
             skipped.append((sheet.title, str(exc)))
             continue
 
+        sheet.cell(row=inserted_row + 1, column=10).value = 0
+        sheet.cell(row=inserted_row + 1, column=15).value = None
         changed.append((sheet.title, inserted_row))
 
     return changed, skipped
