@@ -15,7 +15,7 @@ import zipfile
 from openpyxl.formula.translate import Translator
 from openpyxl.utils.cell import get_column_letter, range_boundaries
 
-from autoexcel.fast_xlsx import MAIN_NS, list_sheets
+from autoexcel.fast_xlsx import MAIN_NS, SheetEntry, list_sheets
 
 
 LogCallback = Callable[[str], None]
@@ -262,6 +262,106 @@ def _validate_wallet_flow_header(
     actual = _header_values(row, shared_strings, len(WALLET_FLOW_HEADERS))
     if actual != WALLET_FLOW_HEADERS:
         raise ValueError(f"{label}表头与钱包流水需要的 A:O 字段不一致")
+
+
+def _is_header_row(
+    row: ET.Element | None,
+    shared_strings: dict[int, str],
+    validator: Callable[[ET.Element, dict[int, str], str], None],
+) -> bool:
+    if row is None:
+        return False
+    try:
+        validator(row, shared_strings, "来源工作表")
+    except ValueError:
+        return False
+    return True
+
+
+def _merge_source_sheet_roots(
+    roots: list[ET.Element],
+    sheet_names: list[str],
+    shared_strings: dict[int, str],
+    label: str,
+    header_row_number: int,
+    key_column: str,
+    validator: Callable[[ET.Element, dict[int, str], str], None],
+) -> ET.Element:
+    if not roots:
+        raise ValueError(f"{label}中没有工作表")
+
+    first_sheet_data = roots[0].find(_tag("sheetData"))
+    if first_sheet_data is None:
+        raise ValueError(f"{label}/{sheet_names[0]}缺少 sheetData")
+    first_rows = first_sheet_data.findall(_tag("row"))
+    first_by_number = {_row_number(row): row for row in first_rows}
+    first_header = first_by_number.get(header_row_number)
+    if first_header is None:
+        raise ValueError(
+            f"{label}/{sheet_names[0]}缺少第 {header_row_number} 行表头"
+        )
+    validator(first_header, shared_strings, f"{label}/{sheet_names[0]}")
+
+    merged_root = ET.Element(_tag("worksheet"))
+    merged_sheet_data = ET.SubElement(merged_root, _tag("sheetData"))
+    for row_number in range(1, header_row_number + 1):
+        source_row = first_by_number.get(row_number)
+        if source_row is None:
+            source_row = ET.Element(_tag("row"), {"r": str(row_number)})
+        merged_sheet_data.append(source_row)
+
+    output_row_number = header_row_number + 1
+    found_rows = 0
+    seen_keys: set[str] = set()
+    for index, (root, sheet_name) in enumerate(
+        zip(roots, sheet_names),
+    ):
+        sheet_data = root.find(_tag("sheetData"))
+        if sheet_data is None:
+            raise ValueError(f"{label}/{sheet_name}缺少 sheetData")
+        rows = sheet_data.findall(_tag("row"))
+        rows_by_number = {_row_number(row): row for row in rows}
+        if index == 0:
+            start_row = header_row_number + 1
+        elif _is_header_row(rows_by_number.get(1), shared_strings, validator):
+            start_row = 2
+        elif _is_header_row(rows_by_number.get(2), shared_strings, validator):
+            start_row = 3
+        else:
+            start_row = 1
+
+        if not _cell_has_value(_cell_at(rows_by_number.get(start_row), key_column)):
+            if any(
+                _cell_has_value(cell)
+                for row in rows
+                for cell in row.findall(_tag("c"))
+            ):
+                raise ValueError(
+                    f"{label}/{sheet_name}第 {start_row} 行"
+                    f"缺少{key_column}列关键字段"
+                )
+            continue
+
+        detail_end = _continuous_key_end(
+            rows_by_number,
+            f"{label}/{sheet_name}",
+            start_row,
+            key_column,
+        )
+        for row_number in range(start_row, detail_end + 1):
+            row = rows_by_number[row_number]
+            key = _cell_text(_cell_at(row, key_column), shared_strings)
+            if key in seen_keys:
+                raise ValueError(f"{label}{key_column}列关键字段重复：{key}")
+            seen_keys.add(key)
+            _set_row_number(row, output_row_number)
+            merged_sheet_data.append(row)
+            output_row_number += 1
+            found_rows += 1
+
+    if not found_rows:
+        raise ValueError(f"{label}没有可识别的明细")
+    return merged_root
 
 
 def _continuous_detail_end(rows_by_number: dict[int, ET.Element], label: str) -> int:
@@ -854,7 +954,6 @@ def sync_tp_payout(
     source_entries = list_sheets(payment_orders_path)
     if not source_entries:
         raise ValueError("付款订单文件中没有工作表")
-    source_entry = source_entries[0]
 
     if progress is not None:
         progress("正在识别 TP代付 历史明细范围…")
@@ -866,13 +965,30 @@ def sync_tp_payout(
         )
 
         if progress is not None:
-            progress("正在读取付款订单明细…")
+            progress(f"正在读取付款订单全部 {len(source_entries)} 个 Sheet…")
         with zipfile.ZipFile(payment_orders_path, "r") as source_archive:
-            source_root = ET.fromstring(source_archive.read(source_entry.path))
+            source_roots = [
+                ET.fromstring(source_archive.read(entry.path))
+                for entry in source_entries
+            ]
             source_shared = _load_shared_strings(
                 source_archive,
-                _requested_source_shared_indices(source_root),
+                set().union(
+                    *(
+                        _requested_source_shared_indices(root)
+                        for root in source_roots
+                    )
+                ),
             )
+        source_root = _merge_source_sheet_roots(
+            source_roots,
+            [entry.name for entry in source_entries],
+            source_shared,
+            "付款订单",
+            1,
+            "A",
+            _validate_header,
+        )
 
         result = _replace_tp_payout_roots(
             target_root,
@@ -949,12 +1065,12 @@ def sync_tp_collection(
         first_collection_orders_path,
         second_collection_orders_path,
     )
-    source_entries = []
+    source_entries: list[list[SheetEntry]] = []
     for index, source_path in enumerate(source_paths, start=1):
         entries = list_sheets(source_path)
         if not entries:
             raise ValueError(f"收款订单文件 {index} 中没有工作表")
-        source_entries.append(entries[0])
+        source_entries.append(entries)
 
     if progress is not None:
         progress("正在识别 TP代收 历史明细和汇总区域…")
@@ -967,21 +1083,41 @@ def sync_tp_collection(
 
         source_roots: list[ET.Element] = []
         source_shared_strings: list[dict[int, str]] = []
-        for index, (source_path, source_entry) in enumerate(
+        for index, (source_path, entries) in enumerate(
             zip(source_paths, source_entries),
             start=1,
         ):
             if progress is not None:
-                progress(f"正在读取收款订单文件 {index}…")
-            with zipfile.ZipFile(source_path, "r") as source_archive:
-                source_root = ET.fromstring(source_archive.read(source_entry.path))
-                source_roots.append(source_root)
-                source_shared_strings.append(
-                    _load_shared_strings(
-                        source_archive,
-                        _requested_source_shared_indices(source_root),
-                    )
+                progress(
+                    f"正在读取收款订单文件 {index} 的全部 "
+                    f"{len(entries)} 个 Sheet…"
                 )
+            with zipfile.ZipFile(source_path, "r") as source_archive:
+                roots = [
+                    ET.fromstring(source_archive.read(entry.path))
+                    for entry in entries
+                ]
+                shared_strings = _load_shared_strings(
+                    source_archive,
+                    set().union(
+                        *(
+                            _requested_source_shared_indices(root)
+                            for root in roots
+                        )
+                    ),
+                )
+            source_roots.append(
+                _merge_source_sheet_roots(
+                    roots,
+                    [entry.name for entry in entries],
+                    shared_strings,
+                    f"收款订单文件 {index}",
+                    1,
+                    "A",
+                    _validate_collection_header,
+                )
+            )
+            source_shared_strings.append(shared_strings)
 
         if progress is not None:
             progress("正在校验交易状态和重复平台订单号…")
@@ -1060,7 +1196,6 @@ def sync_wallet_flow(
     source_entries = list_sheets(wallet_flow_path)
     if not source_entries:
         raise ValueError("平台钱包流水记录中没有工作表")
-    source_entry = source_entries[0]
 
     if progress is not None:
         progress("正在识别 长款(当日) 历史明细和汇总区域…")
@@ -1072,13 +1207,32 @@ def sync_wallet_flow(
         )
 
         if progress is not None:
-            progress("正在读取全部平台钱包流水记录…")
+            progress(
+                f"正在读取平台钱包流水记录全部 {len(source_entries)} 个 Sheet…"
+            )
         with zipfile.ZipFile(wallet_flow_path, "r") as source_archive:
-            source_root = ET.fromstring(source_archive.read(source_entry.path))
+            source_roots = [
+                ET.fromstring(source_archive.read(entry.path))
+                for entry in source_entries
+            ]
             source_shared = _load_shared_strings(
                 source_archive,
-                _requested_source_shared_indices(source_root),
+                set().union(
+                    *(
+                        _requested_source_shared_indices(root)
+                        for root in source_roots
+                    )
+                ),
             )
+        source_root = _merge_source_sheet_roots(
+            source_roots,
+            [entry.name for entry in source_entries],
+            source_shared,
+            "平台钱包流水记录",
+            2,
+            "F",
+            _validate_wallet_flow_header,
+        )
 
         result = _replace_wallet_flow_roots(
             target_root,

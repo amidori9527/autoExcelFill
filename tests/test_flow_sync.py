@@ -15,9 +15,14 @@ from autoexcel.flow_sync import (
     TpCollectionSyncResult,
     TpPayoutSyncResult,
     WALLET_FLOW_HEADERS,
+    _cell_text,
+    _merge_source_sheet_roots,
     _replace_tp_collection_roots,
     _replace_tp_payout_roots,
     _replace_wallet_flow_roots,
+    _validate_collection_header,
+    _validate_header,
+    _validate_wallet_flow_header,
     discover_flow_sync_files,
     sync_all_flows,
 )
@@ -231,7 +236,104 @@ def make_wallet_root(
     return root
 
 
+def make_headerless_root(rows: list[dict[str, str]], max_column: str) -> ET.Element:
+    root = ET.Element(tag("worksheet"))
+    ET.SubElement(
+        root,
+        tag("dimension"),
+        {"ref": f"A1:{max_column}{len(rows)}"},
+    )
+    sheet_data = ET.SubElement(root, tag("sheetData"))
+    for row_number, values in enumerate(rows, start=1):
+        sheet_data.append(make_row(row_number, values, "10"))
+    return root
+
+
 class TpPayoutSyncTest(unittest.TestCase):
+    def test_duplicate_key_across_source_sheets_is_rejected(self) -> None:
+        first_source = make_workbook_root(["duplicate-id"], False, "1")
+        continuation = make_headerless_root(
+            [{"A": "duplicate-id"}],
+            "V",
+        )
+
+        with self.assertRaisesRegex(ValueError, "关键字段重复"):
+            _merge_source_sheet_roots(
+                [first_source, continuation],
+                ["付款订单", "Sheet1"],
+                {},
+                "付款订单",
+                1,
+                "A",
+                _validate_header,
+            )
+
+    def test_repeated_header_on_continuation_sheet_is_skipped(self) -> None:
+        target = make_workbook_root(["old-1"], True, "10")
+        first_source = make_workbook_root(["new-1"], False, "1")
+        continuation = make_workbook_root(["new-2"], False, "1")
+        merged_source = _merge_source_sheet_roots(
+            [first_source, continuation],
+            ["付款订单", "Sheet1"],
+            {},
+            "付款订单",
+            1,
+            "A",
+            _validate_header,
+        )
+
+        result = _replace_tp_payout_roots(
+            target,
+            merged_source,
+            {},
+            {},
+        )
+
+        self.assertEqual(result.inserted_rows, 2)
+        self.assertEqual(
+            [
+                _cell_text(row_by_number(target)[row_number].find(tag("c")), {})
+                for row_number in range(2, 4)
+            ],
+            ["new-1", "new-2"],
+        )
+
+    def test_headerless_continuation_sheet_is_appended(self) -> None:
+        target = make_workbook_root(["old-1"], True, "10")
+        first_source = make_workbook_root(["new-1", "new-2"], False, "1")
+        continuation = make_headerless_root(
+            [
+                {"A": "new-3", "B": "merchant-new-3"},
+                {"A": "new-4", "B": "merchant-new-4"},
+            ],
+            "V",
+        )
+        merged_source = _merge_source_sheet_roots(
+            [first_source, continuation],
+            ["付款订单", "Sheet1"],
+            {},
+            "付款订单",
+            1,
+            "A",
+            _validate_header,
+        )
+
+        result = _replace_tp_payout_roots(
+            target,
+            merged_source,
+            {},
+            {},
+        )
+
+        self.assertEqual(result.inserted_rows, 4)
+        self.assertEqual(
+            [
+                _cell_text(row_by_number(target)[row_number].find(tag("c")), {})
+                for row_number in range(2, 6)
+            ],
+            ["new-1", "new-2", "new-3", "new-4"],
+        )
+
     def test_source_shared_strings_are_converted_for_target_workbook(self) -> None:
         target = make_workbook_root(["old-1"], True, "10")
         source = make_workbook_root(["placeholder"], False, "1")
@@ -297,6 +399,54 @@ class TpPayoutSyncTest(unittest.TestCase):
 
 
 class TpCollectionSyncTest(unittest.TestCase):
+    def test_headerless_continuation_sheet_is_appended(self) -> None:
+        target = make_collection_root(
+            ["old-1"],
+            "支付成功",
+            include_summary=True,
+        )
+        successful_first = make_collection_root(
+            ["success-1"],
+            "支付成功",
+            include_summary=False,
+            source_header=True,
+        )
+        successful_continuation = make_headerless_root(
+            [
+                {"A": "success-2", "W": "支付成功"},
+                {"A": "success-3", "W": "支付成功"},
+            ],
+            "Z",
+        )
+        successful_source = _merge_source_sheet_roots(
+            [successful_first, successful_continuation],
+            ["收款订单", "Sheet1"],
+            {},
+            "收款订单文件 1",
+            1,
+            "A",
+            _validate_collection_header,
+        )
+        partial_source = make_collection_root(
+            ["partial-1"],
+            "部分支付",
+            include_summary=False,
+            source_header=True,
+        )
+
+        result = _replace_tp_collection_roots(
+            target,
+            successful_source,
+            partial_source,
+            {},
+            {},
+            {},
+        )
+
+        self.assertEqual(result.successful_rows, 3)
+        self.assertEqual(result.partial_rows, 1)
+        self.assertEqual(result.inserted_rows, 4)
+
     def test_sources_are_classified_and_success_rows_are_written_first(self) -> None:
         target = make_collection_root(
             ["old-1", "old-2"],
@@ -402,6 +552,43 @@ class TpCollectionSyncTest(unittest.TestCase):
 
 
 class WalletFlowSyncTest(unittest.TestCase):
+    def test_headerless_continuation_sheet_is_appended(self) -> None:
+        target = make_wallet_root(
+            ["old-1"],
+            include_summary=True,
+            source_layout=False,
+        )
+        first_source = make_wallet_root(
+            ["wallet-1"],
+            include_summary=False,
+            source_layout=True,
+        )
+        continuation = make_headerless_root(
+            [
+                {"F": "wallet-2", "K": "长款"},
+                {"F": "wallet-3", "K": "长款"},
+            ],
+            "O",
+        )
+        merged_source = _merge_source_sheet_roots(
+            [first_source, continuation],
+            ["平台钱包流水记录", "Sheet1"],
+            {},
+            "平台钱包流水记录",
+            2,
+            "F",
+            _validate_wallet_flow_header,
+        )
+
+        result = _replace_wallet_flow_roots(
+            target,
+            merged_source,
+            {},
+            {},
+        )
+
+        self.assertEqual(result.inserted_rows, 3)
+
     def test_all_source_rows_are_written_including_cross_day_record(self) -> None:
         target = make_wallet_root(
             ["old-1", "old-2"],
