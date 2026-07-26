@@ -2,14 +2,24 @@ from __future__ import annotations
 
 import unittest
 import xml.etree.ElementTree as ET
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from openpyxl import Workbook
 
 from autoexcel.flow_sync import (
+    FlowSyncFiles,
     TP_COLLECTION_HEADERS,
     TP_PAYOUT_HEADERS,
+    TpCollectionSyncResult,
+    TpPayoutSyncResult,
     WALLET_FLOW_HEADERS,
     _replace_tp_collection_roots,
     _replace_tp_payout_roots,
     _replace_wallet_flow_roots,
+    discover_flow_sync_files,
+    sync_all_flows,
 )
 from autoexcel.fast_xlsx import MAIN_NS
 
@@ -426,6 +436,164 @@ class WalletFlowSyncTest(unittest.TestCase):
         self.assertEqual(result.summary_row, 6)
         self.assertEqual(result.shifted_rows, 1)
         self.assertEqual(target.find(tag("autoFilter")).attrib["ref"], "A1:N4")
+
+
+class FullFlowSyncTest(unittest.TestCase):
+    @staticmethod
+    def save_workbook(path: Path, sheet_names: list[str]) -> None:
+        workbook = Workbook()
+        workbook.active.title = sheet_names[0]
+        for sheet_name in sheet_names[1:]:
+            workbook.create_sheet(sheet_name)
+        workbook.save(path)
+
+    def test_discovers_sources_by_prefix_and_workbook_by_sheets(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            workbook = directory / "2026.7.23孟加拉对账结果.xlsx"
+            self.save_workbook(
+                workbook,
+                ["TP代付", "TP代收", "长款(当日)", "其他"],
+            )
+            payment = directory / "付款订单_001.xlsx"
+            first_collection = directory / "收款订单_001.xlsx"
+            second_collection = directory / "收款订单_002.xlsx"
+            wallet = directory / "平台钱包流水记录_001.xlsx"
+            for path in (
+                payment,
+                first_collection,
+                second_collection,
+                wallet,
+            ):
+                self.save_workbook(path, ["Sheet1"])
+            (directory / "~$付款订单_临时.xlsx").touch()
+
+            result = discover_flow_sync_files(directory)
+
+            self.assertEqual(result.workbook, workbook)
+            self.assertEqual(result.payment_orders, payment)
+            self.assertEqual(
+                result.collection_orders,
+                (first_collection, second_collection),
+            )
+            self.assertEqual(result.wallet_flow, wallet)
+
+    def test_rejects_incorrect_source_file_count(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            self.save_workbook(directory / "付款订单_001.xlsx", ["Sheet1"])
+
+            with self.assertRaisesRegex(ValueError, "收款订单 Excel：应有 2 个"):
+                discover_flow_sync_files(directory)
+
+    def test_failure_does_not_change_original_workbook(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            workbook = directory / "workbook.xlsx"
+            workbook.write_bytes(b"original")
+            files = FlowSyncFiles(
+                directory=directory,
+                workbook=workbook,
+                payment_orders=directory / "付款订单.xlsx",
+                collection_orders=(
+                    directory / "收款订单1.xlsx",
+                    directory / "收款订单2.xlsx",
+                ),
+                wallet_flow=directory / "平台钱包流水.xlsx",
+            )
+            payout_result = TpPayoutSyncResult(1, 2, 2, 3, None, 1)
+
+            def change_temporary(path: Path, *_args, **_kwargs):
+                path.write_bytes(b"partial")
+                return payout_result
+
+            with (
+                patch(
+                    "autoexcel.flow_sync.discover_flow_sync_files",
+                    return_value=files,
+                ),
+                patch(
+                    "autoexcel.flow_sync.sync_tp_payout",
+                    side_effect=change_temporary,
+                ),
+                patch(
+                    "autoexcel.flow_sync.sync_tp_collection",
+                    side_effect=ValueError("collection failed"),
+                ),
+            ):
+                with self.assertRaisesRegex(ValueError, "collection failed"):
+                    sync_all_flows(directory)
+
+            self.assertEqual(workbook.read_bytes(), b"original")
+            self.assertFalse(
+                list(directory.glob("*.flow-sync.*.tmp.xlsx"))
+            )
+
+    def test_success_replaces_original_after_all_three_steps(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            workbook = directory / "workbook.xlsx"
+            workbook.write_bytes(b"original")
+            files = FlowSyncFiles(
+                directory=directory,
+                workbook=workbook,
+                payment_orders=directory / "付款订单.xlsx",
+                collection_orders=(
+                    directory / "收款订单1.xlsx",
+                    directory / "收款订单2.xlsx",
+                ),
+                wallet_flow=directory / "平台钱包流水.xlsx",
+            )
+            payout_result = TpPayoutSyncResult(1, 2, 2, 3, None, 1)
+            collection_result = TpCollectionSyncResult(
+                1,
+                2,
+                2,
+                3,
+                None,
+                1,
+                1,
+                1,
+            )
+
+            def append_marker(marker: bytes, result):
+                def update(path: Path, *_args, **_kwargs):
+                    path.write_bytes(path.read_bytes() + marker)
+                    return result
+
+                return update
+
+            with (
+                patch(
+                    "autoexcel.flow_sync.discover_flow_sync_files",
+                    return_value=files,
+                ),
+                patch(
+                    "autoexcel.flow_sync.sync_tp_payout",
+                    side_effect=append_marker(b"-payout", payout_result),
+                ),
+                patch(
+                    "autoexcel.flow_sync.sync_tp_collection",
+                    side_effect=append_marker(
+                        b"-collection",
+                        collection_result,
+                    ),
+                ),
+                patch(
+                    "autoexcel.flow_sync.sync_wallet_flow",
+                    side_effect=append_marker(b"-wallet", payout_result),
+                ),
+            ):
+                result = sync_all_flows(directory)
+
+            self.assertEqual(
+                workbook.read_bytes(),
+                b"original-payout-collection-wallet",
+            )
+            self.assertEqual(result.files, files)
+            self.assertFalse(
+                list(directory.glob("*.flow-sync.*.tmp.xlsx"))
+            )
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,10 +9,16 @@ from unittest.mock import patch
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.table import Table
 
-from autoexcel.flow_sync import TpCollectionSyncResult, TpPayoutSyncResult
+from autoexcel.flow_sync import (
+    FlowSyncFiles,
+    FullFlowSyncResult,
+    TpCollectionSyncResult,
+    TpPayoutSyncResult,
+)
 from autoexcel.gui_tasks import (
     _jobs_from_directory,
     run_fill_task,
+    run_full_flow_sync_task,
     run_tp_collection_sync_task,
     run_tp_payout_sync_task,
     run_wallet_flow_sync_task,
@@ -20,6 +26,44 @@ from autoexcel.gui_tasks import (
 
 
 class GuiTasksTest(unittest.TestCase):
+    def test_full_flow_sync_task_reports_all_row_counts(self) -> None:
+        directory = Path("/tmp/flow-sync")
+        workbook = directory / "对账结果.xlsx"
+        payout = TpPayoutSyncResult(10, 14, 11, 15, 18, 4)
+        collection = TpCollectionSyncResult(20, 12, 21, 13, 30, 0, 10, 2)
+        wallet = TpPayoutSyncResult(30, 18, 31, 19, 40, 0)
+        result = FullFlowSyncResult(
+            files=FlowSyncFiles(
+                directory=directory,
+                workbook=workbook,
+                payment_orders=directory / "付款订单.xlsx",
+                collection_orders=(
+                    directory / "收款订单1.xlsx",
+                    directory / "收款订单2.xlsx",
+                ),
+                wallet_flow=directory / "平台钱包流水.xlsx",
+            ),
+            payout=payout,
+            collection=collection,
+            wallet=wallet,
+        )
+
+        with patch(
+            "autoexcel.gui_tasks.flow_sync.sync_all_flows",
+            return_value=result,
+        ) as sync:
+            task_result = run_full_flow_sync_task(
+                directory,
+                lambda _message: None,
+            )
+
+        sync.assert_called_once()
+        self.assertEqual(task_result.title, "一键流水同步完成")
+        self.assertIn("TP代付 14 条", task_result.summary)
+        self.assertIn("TP代收 12 条", task_result.summary)
+        self.assertIn("钱包流水 18 条", task_result.summary)
+        self.assertEqual(task_result.output_path, workbook)
+
     def test_wallet_flow_sync_task_reports_row_counts(self) -> None:
         result = TpPayoutSyncResult(
             removed_rows=20,

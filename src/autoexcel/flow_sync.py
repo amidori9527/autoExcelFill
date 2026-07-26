@@ -108,6 +108,23 @@ class TpCollectionSyncResult(TpPayoutSyncResult):
     partial_rows: int
 
 
+@dataclass(frozen=True)
+class FlowSyncFiles:
+    directory: Path
+    workbook: Path
+    payment_orders: Path
+    collection_orders: tuple[Path, Path]
+    wallet_flow: Path
+
+
+@dataclass(frozen=True)
+class FullFlowSyncResult:
+    files: FlowSyncFiles
+    payout: TpPayoutSyncResult
+    collection: TpCollectionSyncResult
+    wallet: TpPayoutSyncResult
+
+
 def _tag(name: str) -> str:
     return f"{{{MAIN_NS}}}{name}"
 
@@ -1105,3 +1122,132 @@ def sync_wallet_flow(
             temporary_path.unlink()
 
     return result
+
+
+def _require_file_count(
+    files: list[Path],
+    label: str,
+    expected_count: int,
+) -> None:
+    if len(files) == expected_count:
+        return
+    names = "、".join(path.name for path in files) if files else "无"
+    raise ValueError(
+        f"{label}：应有 {expected_count} 个，实际找到 {len(files)} 个：{names}"
+    )
+
+
+def discover_flow_sync_files(directory: Path) -> FlowSyncFiles:
+    if not directory.is_dir():
+        raise NotADirectoryError(f"同步目录不存在：{directory}")
+
+    excel_files = sorted(
+        (
+            path
+            for path in directory.iterdir()
+            if path.is_file()
+            and path.suffix.lower() == ".xlsx"
+            and not path.name.startswith("~$")
+        ),
+        key=lambda path: path.name,
+    )
+    payment_orders = [
+        path for path in excel_files if path.name.startswith("付款订单")
+    ]
+    collection_orders = [
+        path for path in excel_files if path.name.startswith("收款订单")
+    ]
+    wallet_flows = [
+        path for path in excel_files if path.name.startswith("平台钱包流水")
+    ]
+    _require_file_count(payment_orders, "付款订单 Excel", 1)
+    _require_file_count(collection_orders, "收款订单 Excel", 2)
+    _require_file_count(wallet_flows, "平台钱包流水 Excel", 1)
+
+    source_files = {
+        payment_orders[0],
+        collection_orders[0],
+        collection_orders[1],
+        wallet_flows[0],
+    }
+    required_sheets = {"TP代付", "TP代收", "长款(当日)"}
+    workbook_candidates: list[Path] = []
+    for path in excel_files:
+        if path in source_files:
+            continue
+        try:
+            sheet_names = {entry.name for entry in list_sheets(path)}
+        except (KeyError, OSError, ET.ParseError, zipfile.BadZipFile):
+            continue
+        if required_sheets.issubset(sheet_names):
+            workbook_candidates.append(path)
+    _require_file_count(workbook_candidates, "包含三个目标 Sheet 的工作簿", 1)
+
+    return FlowSyncFiles(
+        directory=directory,
+        workbook=workbook_candidates[0],
+        payment_orders=payment_orders[0],
+        collection_orders=(collection_orders[0], collection_orders[1]),
+        wallet_flow=wallet_flows[0],
+    )
+
+
+def sync_all_flows(
+    directory: Path,
+    progress: LogCallback | None = None,
+) -> FullFlowSyncResult:
+    files = discover_flow_sync_files(directory)
+    if progress is not None:
+        progress(f"已识别工作簿：{files.workbook.name}")
+        progress(f"已识别付款订单：{files.payment_orders.name}")
+        progress(
+            "已识别收款订单："
+            f"{files.collection_orders[0].name}、"
+            f"{files.collection_orders[1].name}"
+        )
+        progress(f"已识别平台钱包流水：{files.wallet_flow.name}")
+
+    file_mode = stat.S_IMODE(files.workbook.stat().st_mode)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f"{files.workbook.stem}.flow-sync.",
+        suffix=".tmp.xlsx",
+        dir=files.directory,
+    )
+    os.close(fd)
+    temporary_workbook = Path(temporary_name)
+    try:
+        shutil.copy2(files.workbook, temporary_workbook)
+        if progress is not None:
+            progress("第 1/3 步：正在同步 TP代付…")
+        payout_result = sync_tp_payout(
+            temporary_workbook,
+            files.payment_orders,
+            progress=progress,
+        )
+        if progress is not None:
+            progress("第 2/3 步：正在同步 TP代收…")
+        collection_result = sync_tp_collection(
+            temporary_workbook,
+            files.collection_orders[0],
+            files.collection_orders[1],
+            progress=progress,
+        )
+        if progress is not None:
+            progress("第 3/3 步：正在同步钱包流水…")
+        wallet_result = sync_wallet_flow(
+            temporary_workbook,
+            files.wallet_flow,
+            progress=progress,
+        )
+        os.chmod(temporary_workbook, file_mode)
+        os.replace(temporary_workbook, files.workbook)
+    finally:
+        if temporary_workbook.exists():
+            temporary_workbook.unlink()
+
+    return FullFlowSyncResult(
+        files=files,
+        payout=payout_result,
+        collection=collection_result,
+        wallet=wallet_result,
+    )

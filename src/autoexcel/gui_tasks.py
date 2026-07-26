@@ -24,6 +24,20 @@ class TaskResult:
     output_path: Path | None = None
 
 
+def run_full_flow_sync_task(
+    directory: Path,
+    log: LogCallback,
+) -> TaskResult:
+    result = flow_sync.sync_all_flows(directory, progress=log)
+    summary = (
+        "三项流水同步完成："
+        f"TP代付 {result.payout.inserted_rows} 条，"
+        f"TP代收 {result.collection.inserted_rows} 条，"
+        f"钱包流水 {result.wallet.inserted_rows} 条。"
+    )
+    return TaskResult("一键流水同步完成", summary, result.files.workbook)
+
+
 def run_add_cards_task(workbook: Path, text: str, log: LogCallback) -> TaskResult:
     cards = add_cards.parse_card_numbers(text)
     if not cards:

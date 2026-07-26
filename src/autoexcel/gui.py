@@ -56,6 +56,7 @@ from autoexcel.gui_tasks import (
     run_diff_task,
     run_fetch_task,
     run_fill_task,
+    run_full_flow_sync_task,
     run_payout_diff_files_task,
     run_payout_diff_task,
     run_tp_collection_sync_task,
@@ -949,6 +950,17 @@ class FlowSyncPage(TaskPage):
             scroll_form=True,
         )
         self.feature_names = ("TP代付同步", "TP代收同步", "钱包流水同步")
+        self.full_sync_card = HomeCard(
+            "flow-sync",
+            "一键流水同步",
+            "选择一个文件夹，自动识别工作簿、付款订单、两份收款订单和平台钱包流水。",
+            "推荐",
+            featured=True,
+        )
+        self.full_sync_card.clicked.connect(
+            lambda: self.select_sync_feature("folder")
+        )
+        self.form.addWidget(self.full_sync_card)
         descriptions = (
             "替换工作簿中的 TP代付 明细。",
             "同步 TP 代收业务流水。",
@@ -1059,13 +1071,28 @@ class FlowSyncPage(TaskPage):
                 "读取第一个工作表，第 3 行开始的全部流水都会写入。",
             )
         )
+
+        folder_form = QWidget()
+        folder_layout = QVBoxLayout(folder_form)
+        folder_layout.setContentsMargins(0, 0, 0, 0)
+        folder_layout.setSpacing(14)
+        self.flow_sync_directory_picker = PathPicker("directory")
+        folder_layout.addWidget(
+            FieldBlock(
+                "同步文件夹",
+                self.flow_sync_directory_picker,
+                "文件夹中需包含工作簿、1 个付款订单、2 个收款订单和 1 个平台钱包流水 Excel。",
+            )
+        )
         self.sync_forms.addWidget(payout_form)
         self.sync_forms.addWidget(collection_form)
         self.sync_forms.addWidget(wallet_form)
+        self.sync_forms.addWidget(folder_form)
         self.form.addWidget(self.sync_forms)
 
-        self.active_sync_feature = "payout"
-        self.run_button.setText("开始同步")
+        self.active_sync_feature = "folder"
+        self.sync_forms.setCurrentIndex(3)
+        self.run_button.setText("开始一键流水同步")
         self.run_button.clicked.connect(self.run_sync)
 
     def focus_tp_payout(self) -> None:
@@ -1073,11 +1100,17 @@ class FlowSyncPage(TaskPage):
 
     def select_sync_feature(self, feature: str) -> None:
         self.active_sync_feature = feature
-        feature_indexes = {"payout": 0, "collection": 1, "wallet": 2}
+        feature_indexes = {
+            "payout": 0,
+            "collection": 1,
+            "wallet": 2,
+            "folder": 3,
+        }
         button_labels = {
             "payout": "开始 TP代付同步",
             "collection": "开始 TP代收同步",
             "wallet": "开始钱包流水同步",
+            "folder": "开始一键流水同步",
         }
         self.sync_forms.setCurrentIndex(feature_indexes[feature])
         self.run_button.setText(button_labels[feature])
@@ -1085,11 +1118,15 @@ class FlowSyncPage(TaskPage):
             self.workbook_picker.edit.setFocus()
         elif feature == "collection":
             self.collection_workbook_picker.edit.setFocus()
-        else:
+        elif feature == "wallet":
             self.wallet_workbook_picker.edit.setFocus()
+        else:
+            self.flow_sync_directory_picker.edit.setFocus()
 
     def run_sync(self) -> None:
-        if self.active_sync_feature == "collection":
+        if self.active_sync_feature == "folder":
+            self.run_full_flow_sync()
+        elif self.active_sync_feature == "collection":
             self.run_tp_collection()
         elif self.active_sync_feature == "wallet":
             self.run_wallet_flow()
@@ -1098,6 +1135,23 @@ class FlowSyncPage(TaskPage):
 
     def focus_tp_collection(self) -> None:
         self.select_sync_feature("collection")
+
+    def run_full_flow_sync(self) -> None:
+        directory_text = self.flow_sync_directory_picker.edit.text().strip()
+        if not directory_text:
+            QMessageBox.warning(
+                self,
+                "文件夹未选择",
+                "请选择包含工作簿和四个来源 Excel 的文件夹。",
+            )
+            return
+        directory = Path(directory_text).expanduser()
+        self.start_task(
+            lambda log: run_full_flow_sync_task(
+                directory,
+                log,
+            )
+        )
 
     def run_tp_payout(self) -> None:
         workbook_text = self.workbook_picker.edit.text().strip()
@@ -1163,6 +1217,7 @@ class FlowSyncPage(TaskPage):
         )
 
     def apply_theme(self, palette: dict[str, str]) -> None:
+        self.full_sync_card.apply_theme(palette)
         for card in self.cards:
             card.apply_theme(palette)
 

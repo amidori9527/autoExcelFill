@@ -34,14 +34,16 @@ class GuiHomeCardsTest(unittest.TestCase):
         self.assertEqual(positions[7], (2, 2, 1, 1))
         self.assertEqual(page.cards[1].objectName(), "homeFeaturedCard")
 
-    def test_flow_sync_page_contains_three_sub_features(self) -> None:
+    def test_flow_sync_page_contains_one_click_and_three_sub_features(self) -> None:
         page = FlowSyncPage()
 
         self.assertEqual(
             page.feature_names,
             ("TP代付同步", "TP代收同步", "钱包流水同步"),
         )
+        self.assertIsNotNone(page.full_sync_card)
         self.assertEqual(len(page.cards), 3)
+        self.assertIsNotNone(page.flow_sync_directory_picker)
         self.assertIsNotNone(page.workbook_picker)
         self.assertIsNotNone(page.payment_orders_picker)
         self.assertIsNotNone(page.collection_workbook_picker)
@@ -49,7 +51,9 @@ class GuiHomeCardsTest(unittest.TestCase):
         self.assertIsNotNone(page.collection_orders_second_picker)
         self.assertIsNotNone(page.wallet_workbook_picker)
         self.assertIsNotNone(page.wallet_flow_picker)
-        self.assertEqual(page.run_button.text(), "开始同步")
+        self.assertEqual(page.active_sync_feature, "folder")
+        self.assertEqual(page.sync_forms.currentIndex(), 3)
+        self.assertEqual(page.run_button.text(), "开始一键流水同步")
 
         page.focus_tp_collection()
 
