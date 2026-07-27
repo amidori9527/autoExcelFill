@@ -25,10 +25,16 @@ class GuiLicenseAccessTest(unittest.TestCase):
         self.assertTrue(window.sidebar.buttons[3].isHidden())
         self.assertTrue(window.sidebar.buttons[4].isHidden())
         self.assertTrue(window.sidebar.buttons[5].isHidden())
+        self.assertTrue(window.sidebar.buttons[7].isHidden())
         self.assertTrue(window.home_page.cards[1].isHidden())
         self.assertTrue(window.home_page.cards[2].isHidden())
         self.assertTrue(window.home_page.cards[3].isHidden())
         self.assertTrue(window.home_page.cards[4].isHidden())
+        self.assertTrue(window.home_page.cards[6].isHidden())
+
+        window.show_page(8)
+
+        self.assertEqual(window.pages.currentIndex(), 0)
 
     def test_full_license_shows_order_features(self) -> None:
         with patch("autoexcel.gui.load_license", return_value=LicenseInfo(False, "未配置密钥")):
@@ -45,10 +51,12 @@ class GuiLicenseAccessTest(unittest.TestCase):
         self.assertFalse(window.sidebar.buttons[3].isHidden())
         self.assertFalse(window.sidebar.buttons[4].isHidden())
         self.assertFalse(window.sidebar.buttons[5].isHidden())
+        self.assertFalse(window.sidebar.buttons[7].isHidden())
         self.assertFalse(window.home_page.cards[1].isHidden())
         self.assertFalse(window.home_page.cards[2].isHidden())
         self.assertFalse(window.home_page.cards[3].isHidden())
         self.assertFalse(window.home_page.cards[4].isHidden())
+        self.assertFalse(window.home_page.cards[6].isHidden())
 
 
 if __name__ == "__main__":

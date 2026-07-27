@@ -682,7 +682,7 @@ class HomePage(QWidget):
             add_cards,
             add_b2b,
             order_diff,
-            True,
+            order_diff,
             True,
         )
         visible_cards = [card for card, visible in zip(self.cards, visibility) if visible]
@@ -1124,6 +1124,13 @@ class FlowSyncPage(TaskPage):
             self.flow_sync_directory_picker.edit.setFocus()
 
     def run_sync(self) -> None:
+        if not load_license().allows(FEATURE_ORDER_DIFF):
+            QMessageBox.warning(
+                self,
+                "功能未授权",
+                "请先在配置管理中验证包含订单比对权限的密钥。",
+            )
+            return
         if self.active_sync_feature == "folder":
             self.run_full_flow_sync()
         elif self.active_sync_feature == "collection":
@@ -2307,6 +2314,7 @@ class Sidebar(QFrame):
         self.buttons[4].setVisible(add_cards)
         self.buttons[5].setVisible(add_b2b)
         self.buttons[6].setVisible(order_diff)
+        self.buttons[7].setVisible(order_diff)
 
 
 class MainWindow(QMainWindow):
@@ -2371,6 +2379,7 @@ class MainWindow(QMainWindow):
             4: FEATURE_ADD_CARDS,
             5: FEATURE_ADD_B2B,
             6: FEATURE_ORDER_DIFF,
+            8: FEATURE_ORDER_DIFF,
         }.get(index)
         if required_feature and not self.license_info.allows(required_feature):
             return
@@ -2397,6 +2406,7 @@ class MainWindow(QMainWindow):
             4: FEATURE_ADD_CARDS,
             5: FEATURE_ADD_B2B,
             6: FEATURE_ORDER_DIFF,
+            8: FEATURE_ORDER_DIFF,
         }.get(self.pages.currentIndex())
         if required_feature and not info.allows(required_feature):
             self.show_page(0)

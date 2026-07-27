@@ -91,11 +91,13 @@ platform setting. Login credentials and session values remain isolated in
 ### Feature licenses
 
 Without a valid license, the desktop interface exposes only Excel fill and
-settings. Order comparison and order download are enabled by an Ed25519-signed
-license key entered in the settings page. The license is stored in `license.key`
-beside the distributed application and is not written to `config.ini`.
+settings. Order comparison, order download, card creation, and B2B extraction
+are enabled by an Ed25519-signed license key entered in the settings page. Flow
+sync uses the order comparison entitlement. The license is stored in
+`license.key` beside the distributed application and is not written to
+`config.ini`.
 
-Generate a permanent license for both protected features:
+Generate a permanent license for all protected features:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m autoexcel.license_tool \

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
 from autoexcel.gui import FlowSyncPage, HomePage
+from autoexcel.license import LicenseInfo
 
 
 class GuiHomeCardsTest(unittest.TestCase):
@@ -66,6 +68,21 @@ class GuiHomeCardsTest(unittest.TestCase):
         self.assertEqual(page.active_sync_feature, "wallet")
         self.assertEqual(page.sync_forms.currentIndex(), 2)
         self.assertEqual(page.run_button.text(), "开始钱包流水同步")
+
+    def test_flow_sync_run_requires_license(self) -> None:
+        page = FlowSyncPage()
+        with (
+            patch(
+                "autoexcel.gui.load_license",
+                return_value=LicenseInfo(False, "未配置密钥"),
+            ),
+            patch("autoexcel.gui.QMessageBox.warning") as warning,
+            patch.object(page, "run_full_flow_sync") as run_full_flow_sync,
+        ):
+            page.run_sync()
+
+        warning.assert_called_once()
+        run_full_flow_sync.assert_not_called()
 
 
 if __name__ == "__main__":
