@@ -7,6 +7,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QMovie
 
 from autoexcel.gui import FlowSyncPage, HomePage
 from autoexcel.license import LicenseInfo
@@ -17,8 +18,11 @@ class GuiHomeCardsTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_full_access_uses_featured_three_column_card_layout(self) -> None:
+    def test_full_access_uses_balanced_three_column_card_layout(self) -> None:
         page = HomePage()
+        page.resize(1200, 800)
+        page.show()
+        self.app.processEvents()
         page.set_feature_access(True, True, True, True)
 
         positions = {
@@ -31,10 +35,36 @@ class GuiHomeCardsTest(unittest.TestCase):
         self.assertEqual(positions[2], (1, 0, 1, 1))
         self.assertEqual(positions[3], (1, 1, 1, 1))
         self.assertEqual(positions[4], (1, 2, 1, 1))
-        self.assertEqual(positions[5], (2, 0, 1, 2))
-        self.assertEqual(positions[6], (3, 0, 1, 3))
+        self.assertEqual(positions[5], (2, 0, 1, 1))
+        self.assertEqual(positions[6], (2, 1, 1, 1))
         self.assertEqual(positions[7], (2, 2, 1, 1))
         self.assertEqual(page.cards[1].objectName(), "homeFeaturedCard")
+
+    def test_narrow_home_page_reflows_cards_to_two_columns(self) -> None:
+        page = HomePage()
+        page.resize(700, 650)
+        page.show()
+        self.app.processEvents()
+        page.set_feature_access(True, True, True, True)
+
+        positions = {
+            index: page.grid.getItemPosition(page.grid.indexOf(card))
+            for index, card in enumerate(page.cards)
+        }
+
+        self.assertEqual(positions[1], (0, 0, 1, 2))
+        self.assertEqual(positions[0], (1, 0, 1, 1))
+        self.assertEqual(positions[2], (1, 1, 1, 1))
+        self.assertEqual(positions[7], (4, 0, 1, 1))
+
+    def test_home_hero_uses_looping_rabbit_animation(self) -> None:
+        page = HomePage()
+
+        self.assertIs(page.hero_icon.movie(), page.hero_movie)
+        self.assertTrue(page.hero_movie.isValid())
+        self.assertEqual(page.hero_movie.state(), QMovie.MovieState.Running)
+        self.assertEqual(page.hero_icon.size().toTuple(), (92, 92))
+        self.assertEqual(page.hero_movie.scaledSize().toTuple(), (92, 92))
 
     def test_flow_sync_page_contains_one_click_and_three_sub_features(self) -> None:
         page = FlowSyncPage()

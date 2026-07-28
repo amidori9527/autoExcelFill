@@ -18,7 +18,8 @@ a = Analysis(
     binaries=[],
     datas=[
         ("template/order_diff.html", "template"),
-        ("icon/cover-v4.png", "icon"),
+        ("icon/cover-v5.png", "icon"),
+        ("icon/baby-rabbit.webp", "icon"),
         ("icon/sidebar", "icon/sidebar"),
         ("config.ini", "."),
         ("loginConf.example.ini", "."),
@@ -49,7 +50,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="icon/cover-v4.ico" if sys.platform == "win32" else None,
+    icon="icon/cover-v5.ico" if sys.platform == "win32" else None,
 )
 coll = COLLECT(
     exe,
@@ -65,7 +66,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="SmartSheet Desk.app",
-        icon="icon/cover-v4.icns",
+        icon="icon/cover-v5.icns",
         bundle_identifier="com.smartsheetdesk.desktop",
         info_plist={
             "CFBundleShortVersionString": APP_VERSION,

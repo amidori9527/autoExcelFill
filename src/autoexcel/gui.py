@@ -8,8 +8,8 @@ from pathlib import Path
 from threading import Event
 from typing import Callable
 
-from PySide6.QtCore import QByteArray, QDate, QLocale, QObject, QRectF, QRunnable, QSize, QThreadPool, Qt, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QByteArray, QDate, QLocale, QObject, QRect, QRectF, QRunnable, QSize, QThreadPool, Qt, QUrl, Signal, Slot
+from PySide6.QtGui import QCursor, QDesktopServices, QFont, QIcon, QMovie, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
@@ -75,6 +75,7 @@ from autoexcel.license import (
     remove_license,
 )
 from autoexcel.main import default_target_date
+from autoexcel.poetry import poetry_line_for
 from autoexcel.runtime_paths import (
     bundled_resource,
     ensure_workspace_directories,
@@ -86,61 +87,148 @@ from autoexcel.version import VERSION
 APP_STYLE = """
 QWidget {
     color: #172033;
-    font-family: "PingFang SC", "Microsoft YaHei", Arial;
+    font-family: "Inter", "SF Pro Text", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", Arial;
     font-size: 13px;
 }
 QMainWindow, QWidget#appRoot, QScrollArea#pageScroll > QWidget > QWidget {
     background: #f6f7fb;
 }
-QFrame#sidebar { background: #111827; border: none; }
-QLabel#sidebarBrand { color: #ffffff; font-size: 17px; font-weight: 700; }
-QLabel#sidebarCaption { color: #7f8ca3; font-size: 11px; }
-QLabel#sidebarBrandCaption { color: #7f8ca3; font-size: 9px; font-weight: 700; }
-QLabel#navSection { color: #667085; font-size: 10px; font-weight: 700; }
-QPushButton#navButton {
-    min-height: 42px; padding: 0 14px; text-align: left;
-    color: #aeb8ca; background: transparent; border: none; border-radius: 8px;
+QFrame#sidebar {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #111827, stop:1 #1e293b);
+    border: none;
 }
-QPushButton#navButton:hover { color: #ffffff; background: #1e293b; }
-QPushButton#navButton:checked { color: #ffffff; background: #2f5bea; font-weight: 700; }
-QLabel#pageEyebrow { color: #2f5bea; font-size: 11px; font-weight: 700; }
-QLabel#pageTitle { color: #101828; font-size: 27px; font-weight: 700; }
-QLabel#heroTitle { color: #101828; font-size: 31px; font-weight: 700; }
-QLabel#sectionTitle { color: #101828; font-size: 16px; font-weight: 700; }
-QLabel#cardTitle { color: #101828; font-size: 17px; font-weight: 700; }
-QLabel#featuredCardTitle { color: #101828; font-size: 19px; font-weight: 700; }
+QLabel#sidebarBrand {
+    color: #101828;
+    font-family: "Avenir Next", "SF Pro Display", "PingFang SC", "Microsoft YaHei UI";
+    font-size: 17px;
+    font-weight: 700;
+}
+QLabel#sidebarCaption { color: #7f8ca3; font-size: 10px; }
+QLabel#sidebarBrandCaption {
+    color: #7f8ca3;
+    font-family: "Songti SC", "STSong", "Noto Serif CJK SC", "SimSun", "PingFang SC";
+    font-size: 11px;
+    font-weight: 500;
+    padding: 0 2px;
+}
+QLabel#navSection {
+    color: #7f8ca3;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 4px 10px 2px 10px;
+}
+QPushButton#navButton {
+    min-height: 40px;
+    padding: 0 13px;
+    text-align: left;
+    color: #aeb8ca;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+}
+QPushButton#navButton:hover {
+    color: #101828;
+    background: #1e293b;
+    border-color: #1e293b;
+}
+QPushButton#navButton:checked {
+    color: #fefefe;
+    background: #2f5bea;
+    border-color: #2f5bea;
+    font-weight: 700;
+}
+QLabel#pageEyebrow {
+    color: #2f5bea;
+    font-size: 10px;
+    font-weight: 700;
+}
+QLabel#pageTitle, QLabel#heroTitle {
+    color: #101828;
+    font-family: "Avenir Next", "SF Pro Display", "PingFang SC", "Microsoft YaHei UI";
+    font-weight: 700;
+}
+QLabel#pageTitle { font-size: 27px; }
+QLabel#heroTitle { font-size: 30px; }
+QLabel#heroDescription { color: #667085; font-size: 13px; }
+QLabel#heroBrandIcon {
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+QLabel#sectionTitle {
+    color: #101828;
+    font-family: "Avenir Next", "SF Pro Display", "PingFang SC", "Microsoft YaHei UI";
+    font-size: 16px;
+    font-weight: 700;
+}
+QLabel#cardTitle, QLabel#featuredCardTitle {
+    color: #101828;
+    font-family: "Avenir Next", "SF Pro Display", "PingFang SC", "Microsoft YaHei UI";
+    font-weight: 700;
+}
+QLabel#cardTitle { font-size: 16px; }
+QLabel#featuredCardTitle { font-size: 18px; }
 QLabel#cardDescription { color: #7a8699; font-size: 12px; }
-QLabel#cardAction { color: #3157d5; font-size: 11px; font-weight: 700; }
+QLabel#cardAction {
+    color: #3157d5;
+    background: #edf2ff;
+    border-radius: 8px;
+    padding: 4px 9px;
+    font-size: 10px;
+    font-weight: 700;
+}
 QLabel#fieldLabel { color: #344054; font-size: 12px; font-weight: 700; }
 QLabel#muted, QLabel#fieldHint { color: #7a8699; }
 QLabel#fieldHint { font-size: 11px; }
 QLabel#statusPill {
-    color: #3157d5; background: #edf2ff; border-radius: 10px;
-    padding: 2px 7px; font-size: 10px; font-weight: 700;
+    color: #3157d5;
+    background: #edf2ff;
+    border-radius: 9px;
+    padding: 3px 8px;
+    font-size: 9px;
+    font-weight: 700;
 }
 QFrame#panel, QFrame#homeCard, QFrame#homeFeaturedCard, QFrame#settingSection {
-    background: #ffffff; border: 1px solid #e5e8ef; border-radius: 12px;
+    background: #ffffff;
+    border: 1px solid #e5e8ef;
+    border-radius: 16px;
 }
-QFrame#homeFeaturedCard { background: #f4f7ff; border-color: #cdd7fb; }
+QFrame#homeHero {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #f8faff, stop:1 #edf2ff);
+    border: 1px solid #cdd7fb;
+    border-radius: 20px;
+}
+QFrame#homeFeaturedCard {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #f4f7ff, stop:1 #ffffff);
+    border-color: #cdd7fb;
+}
 QFrame#licensePanel {
-    background: #f8faff; border: 1px solid #cdd7fb; border-radius: 12px;
+    background: #f8faff;
+    border: 1px solid #cdd7fb;
+    border-radius: 16px;
 }
 QLabel#licenseValid { color: #067647; font-weight: 700; }
 QLabel#licenseInvalid { color: #b42318; font-weight: 700; }
 QFrame#homeCard:hover { border-color: #aebcf3; background: #fbfcff; }
-QFrame#homeFeaturedCard:hover { border-color: #9eafe9; background: #e9efff; }
+QFrame#homeFeaturedCard:hover { border-color: #9eafe9; background: #f4f7ff; }
 QFrame#resultRow {
-    background: #fbfcff; border: 1px solid #e5e8ef; border-radius: 10px;
+    background: #fbfcff;
+    border: 1px solid #e5e8ef;
+    border-radius: 12px;
 }
 QFrame#resultRow:hover { background: #f7f9ff; border-color: #b8c5f4; }
-QFrame#emptyResult { background: #fbfcff; border: 1px dashed #d7dce5; border-radius: 10px; }
+QFrame#emptyResult {
+    background: #fbfcff;
+    border: 1px dashed #d7dce5;
+    border-radius: 12px;
+}
 QLabel#resultTitle { color: #172033; font-size: 14px; font-weight: 700; }
 QLabel#resultBadgeCollection {
     color: #067647; background: #ecfdf3; border-radius: 9px;
     padding: 4px 10px; font-size: 11px; font-weight: 700;
 }
 QLabel#resultBadgePayout {
-    color: #4F46E5; background: #EEF2FF; border-radius: 9px;
+    color: #3157d5; background: #edf2ff; border-radius: 9px;
     padding: 4px 10px; font-size: 11px; font-weight: 700;
 }
 QPushButton#resultViewButton {
@@ -149,116 +237,262 @@ QPushButton#resultViewButton {
 QPushButton#resultViewButton:hover { color: #244ac7; background: #e9efff; border-color: #9eafe9; }
 QScrollArea#resultScroll, QWidget#resultList { background: transparent; }
 QLabel#cardIcon {
-    color: #2f5bea; background: #edf2ff; border-radius: 9px;
+    color: #2f5bea;
+    background: #edf2ff;
+    border: 1px solid #cdd7fb;
+    border-radius: 12px;
     font-size: 21px; font-weight: 700; qproperty-alignment: AlignCenter;
 }
 QPushButton {
-    min-height: 34px; border-radius: 7px; padding: 0 14px;
-    border: 1px solid #d7dce5; background: #ffffff; color: #344054;
+    min-height: 36px;
+    border-radius: 9px;
+    padding: 0 15px;
+    border: 1px solid #d7dce5;
+    background: #ffffff;
+    color: #344054;
 }
 QPushButton:hover { background: #f8faff; border-color: #9eafe9; }
-QPushButton#primary { background: #2f5bea; color: #ffffff; border: none; font-weight: 700; }
+QPushButton#primary { background: #2f5bea; color: #fefefe; border: none; font-weight: 700; }
 QPushButton#primary:hover { background: #244ac7; }
 QPushButton#ghost { background: transparent; border: none; color: #667085; }
 QPushButton#ghost:hover { background: #eef1f6; color: #344054; }
 QPushButton#danger { color: #c4322b; border-color: #f0b9b5; background: #fffafa; }
 QPushButton:disabled { color: #98a2b3; background: #f0f2f5; border-color: #e5e7eb; }
-QLineEdit, QComboBox, QSpinBox {
-    min-height: 36px; border: 1px solid #d7dce5; border-radius: 7px;
-    padding: 0 10px; background: #ffffff; selection-background-color: #2f5bea;
+QPushButton#modeToggle {
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 9px;
 }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #2f5bea; }
+QPushButton#modeToggle:hover {
+    background: #eef1f6;
+    border-color: #d7dce5;
+}
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    min-height: 38px;
+    border: 1px solid #d7dce5;
+    border-radius: 9px;
+    padding: 0 11px;
+    background: #ffffff;
+    selection-background-color: #2f5bea;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+    border-color: #2f5bea;
+    background: #fbfcff;
+}
 QComboBox::drop-down { border: none; width: 28px; }
 QCheckBox { spacing: 9px; color: #344054; }
 QCheckBox::indicator { width: 34px; height: 18px; border-radius: 9px; background: #cbd2de; }
 QCheckBox::indicator:checked { background: #2f5bea; image: none; }
 QPlainTextEdit {
-    background: #111827; color: #cbd5e1; border: none; border-radius: 8px;
+    background: #0f172a; color: #cbd5e1; border: none; border-radius: 8px;
     padding: 10px; font-family: Menlo, Consolas, monospace; font-size: 11px;
 }
 QProgressBar { border: none; background: #e8ebf1; border-radius: 3px; height: 6px; }
 QProgressBar::chunk { background: #2f5bea; border-radius: 3px; }
-QScrollArea { border: none; }
+QScrollArea { border: none; background: transparent; }
+QScrollBar:vertical {
+    width: 9px;
+    margin: 4px 2px 4px 2px;
+    background: transparent;
+}
+QScrollBar::handle:vertical {
+    min-height: 36px;
+    background: #cbd2de;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical:hover { background: #aeb8ca; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 QDialog#calendarDialog { background: #ffffff; }
 QCalendarWidget QWidget { alternate-background-color: #ffffff; }
 QCalendarWidget QTableView {
     background: #ffffff; border: none; selection-background-color: #2f5bea;
-    selection-color: #ffffff; outline: none;
+    selection-color: #fefefe; outline: none;
 }
 """
 
 
 DEFAULT_THEME = "indigo"
+DEFAULT_MODE = "light"
 THEME_LABELS = {
     "emerald": "翡翠绿",
     "indigo": "靛青蓝",
 }
 THEME_PALETTES = {
     "emerald": {
-        "text": "#17211d",
-        "canvas": "#f4f7f5",
-        "sidebar": "#14211d",
-        "sidebar_muted": "#7f948c",
-        "muted_dark": "#66776f",
-        "sidebar_text": "#b8c8c2",
-        "sidebar_hover": "#20312b",
-        "primary": "#24845f",
-        "title": "#17211d",
-        "body": "#34463f",
-        "muted": "#75847e",
-        "primary_text": "#2a6f56",
-        "primary_soft": "#e8f4ef",
-        "border": "#dde6e2",
-        "soft_surface": "#f2f8f5",
-        "soft_border": "#c9ded5",
-        "hover_border": "#a7cdbd",
-        "hover_surface": "#f8fbf9",
-        "result_hover": "#f3f9f6",
-        "result_hover_border": "#a9cdbe",
-        "control_border": "#d4dfda",
-        "primary_button_soft": "#f1f8f5",
-        "primary_hover": "#1c6b4d",
-        "primary_soft_hover": "#e3f1eb",
-        "control_hover_border": "#9fc6b6",
-        "ghost_hover": "#eaf1ee",
-        "disabled_text": "#98a69f",
-        "disabled_bg": "#eef2f0",
-        "check_off": "#c7d3ce",
-        "log_text": "#cad8d2",
-        "progress_bg": "#e2eae6",
+        "text": "#24312c",
+        "canvas": "#f4f6f3",
+        "sidebar": "#eef4f1",
+        "sidebar_muted": "#768d82",
+        "muted_dark": "#697870",
+        "sidebar_text": "#4f655b",
+        "sidebar_hover": "#dde9e2",
+        "primary": "#3f8b6c",
+        "title": "#18231f",
+        "body": "#394a43",
+        "muted": "#75837d",
+        "primary_text": "#34775d",
+        "primary_soft": "#eaf4ef",
+        "border": "#dfe6e2",
+        "soft_surface": "#f7faf8",
+        "soft_border": "#cadfd5",
+        "hover_border": "#a8ccbc",
+        "hover_surface": "#fbfdfc",
+        "result_hover": "#f3f8f5",
+        "result_hover_border": "#adccbf",
+        "control_border": "#d5ddd9",
+        "primary_button_soft": "#f0f7f3",
+        "primary_hover": "#307456",
+        "primary_soft_hover": "#e2f0e9",
+        "control_hover_border": "#9fc4b4",
+        "ghost_hover": "#eaf0ed",
+        "disabled_text": "#9ba7a1",
+        "disabled_bg": "#eef1ef",
+        "check_off": "#c9d2ce",
+        "log_text": "#cbd7d2",
+        "log_bg": "#17251f",
+        "progress_bg": "#e2e8e5",
     },
     "indigo": {
-        "text": "#1e293b",
-        "canvas": "#f5f7fa",
-        "sidebar": "#182033",
-        "sidebar_muted": "#8190aa",
-        "muted_dark": "#667085",
-        "sidebar_text": "#b8c1d4",
-        "sidebar_hover": "#242e45",
-        "primary": "#4f63d9",
-        "title": "#111827",
-        "body": "#374151",
-        "muted": "#7b879a",
-        "primary_text": "#4357c5",
-        "primary_soft": "#eef1ff",
-        "border": "#e1e5ed",
-        "soft_surface": "#f7f8fd",
-        "soft_border": "#d5dbf4",
-        "hover_border": "#b9c3f1",
-        "hover_surface": "#fbfcff",
-        "result_hover": "#f6f7fd",
-        "result_hover_border": "#bec7ef",
-        "control_border": "#d8dde7",
-        "primary_button_soft": "#f3f5ff",
-        "primary_hover": "#3f50b8",
-        "primary_soft_hover": "#e8ecff",
-        "control_hover_border": "#aab6e8",
-        "ghost_hover": "#eef0f5",
-        "disabled_text": "#9aa4b2",
-        "disabled_bg": "#f0f2f5",
-        "check_off": "#cbd2de",
-        "log_text": "#cbd5e1",
-        "progress_bg": "#e6e9f0",
+        "text": "#242936",
+        "canvas": "#f4f5f7",
+        "sidebar": "#f1f3f8",
+        "sidebar_muted": "#7c869c",
+        "muted_dark": "#697184",
+        "sidebar_text": "#596277",
+        "sidebar_hover": "#e2e6f0",
+        "primary": "#6673d9",
+        "title": "#181b24",
+        "body": "#3d4351",
+        "muted": "#7c8495",
+        "primary_text": "#5865c7",
+        "primary_soft": "#eef0ff",
+        "border": "#e1e4e9",
+        "soft_surface": "#f8f8fc",
+        "soft_border": "#d7dcf3",
+        "hover_border": "#bac3ec",
+        "hover_surface": "#fcfcfe",
+        "result_hover": "#f6f7fc",
+        "result_hover_border": "#c1c8e9",
+        "control_border": "#d9dde5",
+        "primary_button_soft": "#f3f4fc",
+        "primary_hover": "#5561c5",
+        "primary_soft_hover": "#e7eaff",
+        "control_hover_border": "#abb4df",
+        "ghost_hover": "#eceef3",
+        "disabled_text": "#9ca3b1",
+        "disabled_bg": "#eff1f4",
+        "check_off": "#cbd0da",
+        "log_text": "#cdd3df",
+        "log_bg": "#202638",
+        "progress_bg": "#e5e7ec",
+    },
+}
+LIGHT_COMMON_COLORS = {
+    "surface": "#ffffff",
+    "on_primary": "#ffffff",
+    "success_text": "#067647",
+    "success_surface": "#ecfdf3",
+    "error_text": "#b42318",
+    "danger_text": "#c4322b",
+    "danger_border": "#f0b9b5",
+    "danger_surface": "#fffafa",
+    "disabled_border": "#e5e7eb",
+}
+for palette in THEME_PALETTES.values():
+    palette.update(LIGHT_COMMON_COLORS)
+
+DARK_THEME_PALETTES = {
+    "emerald": {
+        "text": "#e4ece8",
+        "canvas": "#101713",
+        "sidebar": "#151f1a",
+        "sidebar_muted": "#8ca096",
+        "muted_dark": "#9aaba3",
+        "sidebar_text": "#c0cec7",
+        "sidebar_hover": "#223129",
+        "primary": "#56b58c",
+        "title": "#f1f7f4",
+        "body": "#d2ddd7",
+        "muted": "#94a69d",
+        "primary_text": "#86d3b0",
+        "primary_soft": "#1f3a2e",
+        "border": "#293a32",
+        "soft_surface": "#17231d",
+        "soft_border": "#355244",
+        "hover_border": "#4f725f",
+        "hover_surface": "#1b2821",
+        "result_hover": "#1d2c24",
+        "result_hover_border": "#486a58",
+        "control_border": "#384a41",
+        "primary_button_soft": "#1d3127",
+        "primary_hover": "#45a27a",
+        "primary_soft_hover": "#284737",
+        "control_hover_border": "#5a7c69",
+        "ghost_hover": "#243129",
+        "disabled_text": "#718078",
+        "disabled_bg": "#222c27",
+        "check_off": "#4c5d54",
+        "log_text": "#d1ddd7",
+        "log_bg": "#090f0c",
+        "progress_bg": "#2a3931",
+        "surface": "#17201c",
+        "on_primary": "#ffffff",
+        "success_text": "#68d5a0",
+        "success_surface": "#173629",
+        "error_text": "#ff938a",
+        "danger_text": "#ff938a",
+        "danger_border": "#714047",
+        "danger_surface": "#301f23",
+        "disabled_border": "#35413b",
+    },
+    "indigo": {
+        "text": "#e7eaf2",
+        "canvas": "#111522",
+        "sidebar": "#171c2a",
+        "sidebar_muted": "#8993aa",
+        "muted_dark": "#9ca5b8",
+        "sidebar_text": "#c5cbd9",
+        "sidebar_hover": "#232a3d",
+        "primary": "#7c88f2",
+        "title": "#f5f7fb",
+        "body": "#d5dae5",
+        "muted": "#9aa4b8",
+        "primary_text": "#aeb7ff",
+        "primary_soft": "#282f50",
+        "border": "#2d3548",
+        "soft_surface": "#181d2b",
+        "soft_border": "#3b4668",
+        "hover_border": "#56658d",
+        "hover_surface": "#1d2332",
+        "result_hover": "#202637",
+        "result_hover_border": "#4d5b80",
+        "control_border": "#3a4357",
+        "primary_button_soft": "#202641",
+        "primary_hover": "#6976e2",
+        "primary_soft_hover": "#30395f",
+        "control_hover_border": "#59698f",
+        "ghost_hover": "#252c3c",
+        "disabled_text": "#717b90",
+        "disabled_bg": "#252a36",
+        "check_off": "#505a6e",
+        "log_text": "#d3d9e7",
+        "log_bg": "#0b0f18",
+        "progress_bg": "#2c3445",
+        "surface": "#181d2a",
+        "on_primary": "#ffffff",
+        "success_text": "#5ed39b",
+        "success_surface": "#173b2c",
+        "error_text": "#ff8a80",
+        "danger_text": "#ff8a80",
+        "danger_border": "#6e3b42",
+        "danger_surface": "#2f1d22",
+        "disabled_border": "#343b4a",
     },
 }
 STYLE_COLOR_TOKENS = {
@@ -292,7 +526,17 @@ STYLE_COLOR_TOKENS = {
     "#f0f2f5": "disabled_bg",
     "#cbd2de": "check_off",
     "#cbd5e1": "log_text",
+    "#0f172a": "log_bg",
     "#e8ebf1": "progress_bg",
+    "#ffffff": "surface",
+    "#fefefe": "on_primary",
+    "#067647": "success_text",
+    "#ecfdf3": "success_surface",
+    "#b42318": "error_text",
+    "#c4322b": "danger_text",
+    "#f0b9b5": "danger_border",
+    "#fffafa": "danger_surface",
+    "#e5e7eb": "disabled_border",
 }
 
 
@@ -301,13 +545,19 @@ def normalize_theme_name(value: str) -> str:
     return normalized if normalized in THEME_PALETTES else DEFAULT_THEME
 
 
-def theme_palette(theme_name: str) -> dict[str, str]:
-    return THEME_PALETTES[normalize_theme_name(theme_name)]
+def normalize_ui_mode(value: str) -> str:
+    normalized = value.strip().lower()
+    return normalized if normalized in {"light", "dark"} else DEFAULT_MODE
 
 
-def build_app_style(theme_name: str) -> str:
+def theme_palette(theme_name: str, mode: str = DEFAULT_MODE) -> dict[str, str]:
+    palettes = DARK_THEME_PALETTES if normalize_ui_mode(mode) == "dark" else THEME_PALETTES
+    return palettes[normalize_theme_name(theme_name)]
+
+
+def build_app_style(theme_name: str, mode: str = DEFAULT_MODE) -> str:
     style = APP_STYLE
-    palette = theme_palette(theme_name)
+    palette = theme_palette(theme_name, mode)
     for color, token in STYLE_COLOR_TOKENS.items():
         style = style.replace(color, f"__THEME_{token.upper()}__")
     for token, color in palette.items():
@@ -320,6 +570,11 @@ def theme_name_from_config(path: Path) -> str:
     return normalize_theme_name(parser.get("ui", "theme", fallback=DEFAULT_THEME))
 
 
+def ui_mode_from_config(path: Path) -> str:
+    parser = read_ini(path)
+    return normalize_ui_mode(parser.get("ui", "mode", fallback=DEFAULT_MODE))
+
+
 def icon_resource_path(name: str) -> Path:
     resource_name = f"icon/sidebar/{name}.svg"
     path = bundled_resource(resource_name)
@@ -329,7 +584,15 @@ def icon_resource_path(name: str) -> Path:
 
 
 def brand_icon_path() -> Path:
-    resource_name = "icon/cover-v4.png"
+    resource_name = "icon/cover-v5.png"
+    path = bundled_resource(resource_name)
+    if path is not None:
+        return path
+    return Path(__file__).resolve().parents[2] / resource_name
+
+
+def hero_animation_path() -> Path:
+    resource_name = "icon/baby-rabbit.webp"
     path = bundled_resource(resource_name)
     if path is not None:
         return path
@@ -579,20 +842,20 @@ class HomeCard(QFrame):
         self.featured = featured
         self.setObjectName("homeFeaturedCard" if featured else "homeCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(132)
-        self.setMaximumHeight(146)
+        self.setMinimumHeight(126)
+        self.setMaximumHeight(140)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(18, 17, 18, 17)
-        layout.setSpacing(15)
+        layout.setContentsMargins(19, 18, 19, 17)
+        layout.setSpacing(14)
         self.icon_label = QLabel()
         self.icon_label.setObjectName("cardIcon")
-        self.icon_label.setFixedSize(44, 44)
+        self.icon_label.setFixedSize(48, 48)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignTop)
 
         content = QVBoxLayout()
         content.setContentsMargins(0, 0, 0, 0)
-        content.setSpacing(7)
+        content.setSpacing(6)
         heading = QHBoxLayout()
         heading.setSpacing(8)
         title_label = QLabel(title)
@@ -608,6 +871,7 @@ class HomeCard(QFrame):
         description_label.setWordWrap(True)
         action_label = QLabel("打开功能  →")
         action_label.setObjectName("cardAction")
+        action_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         content.addLayout(heading)
         content.addWidget(description_label)
         content.addStretch()
@@ -625,48 +889,83 @@ class HomeCard(QFrame):
         super().mousePressEvent(event)
 
 
-class HomePage(QWidget):
+class HomePage(QScrollArea):
     page_requested = Signal(int)
 
     def __init__(self) -> None:
         super().__init__()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(40, 36, 40, 36)
-        layout.setSpacing(10)
-        eyebrow = QLabel("SMARTSHEET DESK")
+        self.setObjectName("pageScroll")
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.content = QWidget()
+        layout = QVBoxLayout(self.content)
+        layout.setContentsMargins(36, 32, 36, 34)
+        layout.setSpacing(20)
+
+        hero = QFrame()
+        hero.setObjectName("homeHero")
+        hero_layout = QHBoxLayout(hero)
+        hero_layout.setContentsMargins(26, 23, 24, 23)
+        hero_layout.setSpacing(24)
+        hero_copy = QVBoxLayout()
+        hero_copy.setContentsMargins(0, 0, 0, 0)
+        hero_copy.setSpacing(7)
+        eyebrow = QLabel("SMARTSHEET DESK  ·  WORKSPACE")
         eyebrow.setObjectName("pageEyebrow")
         title = QLabel("今天要处理什么？")
         title.setObjectName("heroTitle")
-        subtitle = QLabel("选择一个工具开始，运行过程和结果会保留在当前页面。")
-        subtitle.setObjectName("muted")
-        layout.addWidget(eyebrow)
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-        layout.addSpacing(22)
+        subtitle = QLabel("行到水穷处，坐看云起时。")
+        subtitle.setObjectName("heroDescription")
+        subtitle.setWordWrap(True)
+        for label in (eyebrow, title, subtitle):
+            label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        hero_copy.addWidget(eyebrow)
+        hero_copy.addWidget(title)
+        hero_copy.addWidget(subtitle)
+        hero_layout.addLayout(hero_copy, 1)
+        self.hero_icon = QLabel()
+        self.hero_icon.setObjectName("heroBrandIcon")
+        self.hero_icon.setFixedSize(92, 92)
+        self.hero_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        animation_path = hero_animation_path()
+        self.hero_movie = QMovie(str(animation_path))
+        self.hero_movie.setScaledSize(QSize(92, 92))
+        if self.hero_movie.isValid():
+            self.hero_icon.setMovie(self.hero_movie)
+            self.hero_movie.start()
+        else:
+            icon_path = brand_icon_path()
+            if icon_path.is_file():
+                self.hero_icon.setPixmap(QIcon(str(icon_path)).pixmap(QSize(62, 62)))
+        hero_layout.addWidget(self.hero_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(hero)
 
         self.grid = QGridLayout()
-        self.grid.setHorizontalSpacing(14)
-        self.grid.setVerticalSpacing(14)
+        self.grid.setHorizontalSpacing(13)
+        self.grid.setVerticalSpacing(13)
         for column in range(3):
             self.grid.setColumnStretch(column, 1)
         self.cards = [
-            HomeCard("sheet-add", "Excel 增行", "批量处理带颜色标签的工作表。", "本地处理"),
-            HomeCard("compare", "订单差异比对", "分别执行代收与代付对账并生成 HTML 汇总。", "核心功能", featured=True),
-            HomeCard("download", "订单报表下载", "登录后台并下载指定日期的订单报表。", "需要网络"),
-            HomeCard("card-add", "增卡", "根据模板批量创建卡号工作表。", "付费功能"),
-            HomeCard("extract", "提取B2B", "批量提取并写入 B2B 交易数据。", "付费功能"),
-            HomeCard("results", "对账结果", "按生成日期查看代收与代付对账报告。", "历史记录"),
-            HomeCard("flow-sync", "流水同步", "整合 TP 代付、TP 代收和钱包流水同步。", "新模块"),
-            HomeCard("settings", "配置管理", "可视化维护全局配置和功能参数。", "INI 配置"),
+            HomeCard("sheet-add", "Excel 增行", "批量处理带颜色标签的工作表。", "批量增行"),
+            HomeCard("compare", "订单差异比对", "分别执行代收与代付对账并生成 HTML 汇总。", "自动对账", featured=True),
+            HomeCard("download", "订单报表下载", "登录后台并下载指定日期的订单报表。", "在线获取"),
+            HomeCard("card-add", "增卡", "根据模板批量创建卡号工作表。", "批量建卡"),
+            HomeCard("extract", "提取B2B", "批量提取并写入 B2B 交易数据。", "交易提取"),
+            HomeCard("results", "对账结果", "按生成日期查看代收与代付对账报告。", "报告归档"),
+            HomeCard("flow-sync", "流水同步", "整合 TP 代付、TP 代收和钱包流水同步。", "多源同步"),
+            HomeCard("settings", "配置管理", "可视化维护全局配置和功能参数。", "系统设置"),
         ]
         self.card_page_indexes = (1, 2, 3, 4, 5, 6, 8, 7)
         for card, page_index in zip(self.cards, self.card_page_indexes):
             card.clicked.connect(
                 lambda checked=False, page=page_index: self.page_requested.emit(page)
             )
+        self._feature_visibility = (True, False, False, False, False, False, False, True)
+        self._column_count = 0
         self.set_feature_access(False, False, False, False)
         layout.addLayout(self.grid)
         layout.addStretch()
+        self.setWidget(self.content)
 
     def set_feature_access(
         self,
@@ -675,7 +974,7 @@ class HomePage(QWidget):
         add_cards: bool,
         add_b2b: bool,
     ) -> None:
-        visibility = (
+        self._feature_visibility = (
             True,
             order_diff,
             fetch_orders,
@@ -685,27 +984,56 @@ class HomePage(QWidget):
             order_diff,
             True,
         )
-        visible_cards = [card for card, visible in zip(self.cards, visibility) if visible]
+        self._relayout_cards()
+
+    def _relayout_cards(self) -> None:
+        visible_cards = [
+            card
+            for card, visible in zip(self.cards, self._feature_visibility)
+            if visible
+        ]
         for card in self.cards:
             self.grid.removeWidget(card)
             card.setVisible(card in visible_cards)
-        if order_diff:
+
+        column_count = 3 if self.viewport().width() >= 900 else 2
+        self._column_count = column_count
+        order_diff = self._feature_visibility[1]
+        if order_diff and column_count == 3:
             self.grid.addWidget(self.cards[1], 0, 0, 1, 2)
             self.grid.addWidget(self.cards[0], 0, 2)
-            utility_cards = [
+            remaining_cards = [
                 card
-                for card in self.cards[2:5]
-                if card in visible_cards
+                for card in self.cards
+                if card in visible_cards and card not in (self.cards[0], self.cards[1])
             ]
-            for column, card in enumerate(utility_cards):
-                self.grid.addWidget(card, 1, column)
-            result_row = 2 if utility_cards else 1
-            self.grid.addWidget(self.cards[5], result_row, 0, 1, 2)
-            self.grid.addWidget(self.cards[7], result_row, 2)
-            self.grid.addWidget(self.cards[6], result_row + 1, 0, 1, 3)
+            for index, card in enumerate(remaining_cards):
+                self.grid.addWidget(card, 1 + index // 3, index % 3)
             return
+
+        if order_diff:
+            self.grid.addWidget(self.cards[1], 0, 0, 1, column_count)
+            remaining_cards = [
+                card
+                for card in self.cards
+                if card in visible_cards and card is not self.cards[1]
+            ]
+            for index, card in enumerate(remaining_cards):
+                self.grid.addWidget(card, 1 + index // column_count, index % column_count)
+            return
+
         for index, card in enumerate(visible_cards):
-            self.grid.addWidget(card, index // 3, index % 3)
+            self.grid.addWidget(
+                card,
+                index // column_count,
+                index % column_count,
+            )
+
+    def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().resizeEvent(event)
+        column_count = 3 if self.viewport().width() >= 900 else 2
+        if column_count != self._column_count:
+            self._relayout_cards()
 
     def apply_theme(self, palette: dict[str, str]) -> None:
         for card in self.cards:
@@ -2229,36 +2557,42 @@ class SettingsPage(QWidget):
 
 class Sidebar(QFrame):
     page_requested = Signal(int)
+    mode_toggle_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("sidebar")
-        self.setFixedWidth(248)
+        self.setFixedWidth(236)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 26, 16, 20)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 24, 16, 18)
+        layout.setSpacing(6)
 
         brand_row = QHBoxLayout()
-        brand_row.setSpacing(9)
+        brand_row.setSpacing(10)
         self.brand_icon = QLabel()
-        self.brand_icon.setFixedSize(34, 34)
+        self.brand_icon.setFixedSize(40, 40)
         icon_path = brand_icon_path()
         if icon_path.is_file():
-            self.brand_icon.setPixmap(QIcon(str(icon_path)).pixmap(QSize(34, 34)))
+            self.brand_icon.setPixmap(QIcon(str(icon_path)).pixmap(QSize(40, 40)))
         self.brand_label = QLabel("SmartSheet Desk")
         self.brand_label.setObjectName("sidebarBrand")
-        self.brand_caption = QLabel("SMART DATA OPERATIONS")
+        poetry = poetry_line_for()
+        self.brand_caption = QLabel(poetry.replace("，", "，\n", 1))
         self.brand_caption.setObjectName("sidebarBrandCaption")
+        self.brand_caption.setWordWrap(True)
+        self.brand_caption.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         brand_text = QVBoxLayout()
         brand_text.setContentsMargins(0, 0, 0, 0)
-        brand_text.setSpacing(1)
+        brand_text.setSpacing(4)
         brand_text.addWidget(self.brand_label)
         brand_text.addWidget(self.brand_caption)
-        brand_row.addWidget(self.brand_icon)
+        brand_row.addWidget(self.brand_icon, 0, Qt.AlignmentFlag.AlignTop)
         brand_row.addLayout(brand_text, 1)
         layout.addLayout(brand_row)
-        layout.addSpacing(28)
-        section = QLabel("工作区")
+        layout.addSpacing(24)
+        section = QLabel("常用工具")
         section.setObjectName("navSection")
         layout.addWidget(section)
         navigation = [
@@ -2268,14 +2602,19 @@ class Sidebar(QFrame):
             ("订单下载", "download", 3),
             ("增卡", "card-add", 4),
             ("提取B2B", "extract", 5),
-            ("对账结果", "results", 6),
             ("流水同步", "flow-sync", 8),
+            ("对账结果", "results", 6),
             ("配置管理", "settings", 7),
         ]
         self.icon_names = [icon_name for _label, icon_name, _page in navigation]
         self.page_indexes = [page for _label, _icon, page in navigation]
         self.buttons: list[QPushButton] = []
         for label, icon_name, page_index in navigation:
+            if page_index == 6:
+                layout.addSpacing(10)
+                management_section = QLabel("数据与设置")
+                management_section.setObjectName("navSection")
+                layout.addWidget(management_section)
             button = QPushButton(label)
             button.setObjectName("navButton")
             button.setCheckable(True)
@@ -2289,14 +2628,34 @@ class Sidebar(QFrame):
             layout.addWidget(button)
             self.buttons.append(button)
         layout.addStretch()
-        footer = QLabel(f"Version {VERSION}")
-        footer.setObjectName("sidebarCaption")
-        layout.addWidget(footer)
+        footer_row = QHBoxLayout()
+        footer_row.setContentsMargins(0, 0, 0, 0)
+        footer_row.setSpacing(8)
+        self.footer_label = QLabel(f"SmartSheet Desk  ·  v{VERSION}")
+        self.footer_label.setObjectName("sidebarCaption")
+        footer_row.addWidget(self.footer_label)
+        footer_row.addStretch()
+        self.mode_toggle = QPushButton()
+        self.mode_toggle.setObjectName("modeToggle")
+        self.mode_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mode_toggle.setIconSize(QSize(17, 17))
+        self.mode_toggle.clicked.connect(self.mode_toggle_requested.emit)
+        footer_row.addWidget(self.mode_toggle)
+        layout.addLayout(footer_row)
+        self.apply_theme(theme_palette(DEFAULT_THEME), DEFAULT_MODE)
         self.select(0)
 
-    def apply_theme(self, palette: dict[str, str]) -> None:
+    def apply_theme(self, palette: dict[str, str], mode: str = DEFAULT_MODE) -> None:
         for button, icon_name in zip(self.buttons, self.icon_names):
             button.setIcon(themed_navigation_icon(icon_name, palette))
+        dark_mode = normalize_ui_mode(mode) == "dark"
+        icon_name = "sun" if dark_mode else "moon"
+        self.mode_toggle.setIcon(
+            QIcon(themed_svg_pixmap(icon_name, palette["sidebar_text"], QSize(17, 17)))
+        )
+        target_mode_label = "浅色" if dark_mode else "深色"
+        self.mode_toggle.setToolTip(f"切换到{target_mode_label}模式")
+        self.mode_toggle.setAccessibleName(f"切换到{target_mode_label}模式")
 
     def select(self, index: int) -> None:
         for page_index, button in zip(self.page_indexes, self.buttons):
@@ -2317,11 +2676,36 @@ class Sidebar(QFrame):
         self.buttons[7].setVisible(order_diff)
 
 
+def centered_window_geometry(window_size: QSize, available_geometry: QRect) -> QRect:
+    width = min(window_size.width(), available_geometry.width())
+    height = min(window_size.height(), available_geometry.height())
+    left = available_geometry.left() + (available_geometry.width() - width) // 2
+    top = available_geometry.top() + (available_geometry.height() - height) // 2
+    return QRect(left, top, width, height)
+
+
+def center_window_on_current_screen(window: QWidget) -> None:
+    app = QApplication.instance()
+    if app is None:
+        return
+    screen = app.screenAt(QCursor.pos()) or app.primaryScreen()
+    if screen is None:
+        return
+    target = centered_window_geometry(window.size(), screen.availableGeometry())
+    if target.width() < window.minimumWidth() or target.height() < window.minimumHeight():
+        window.setMinimumSize(
+            min(window.minimumWidth(), target.width()),
+            min(window.minimumHeight(), target.height()),
+        )
+    window.resize(target.size())
+    window.move(target.topLeft())
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("SmartSheet Desk")
-        self.resize(1120, 760)
+        self.resize(1280, 820)
         self.setMinimumSize(940, 650)
         root = QWidget()
         root.setObjectName("appRoot")
@@ -2352,22 +2736,32 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.pages, 1)
         self.setCentralWidget(root)
         self.sidebar.page_requested.connect(self.show_page)
+        self.sidebar.mode_toggle_requested.connect(self.toggle_ui_mode)
         self.home_page.page_requested.connect(self.show_page)
         self.settings_page.license_changed.connect(self.apply_license)
         self.settings_page.theme_changed.connect(self.apply_theme)
-        self.apply_theme(theme_name_from_config(self.settings_page.config_path))
+        self.theme_name = theme_name_from_config(self.settings_page.config_path)
+        self.ui_mode = ui_mode_from_config(self.settings_page.config_path)
+        self.apply_theme(self.theme_name)
         self.apply_license(load_license())
 
     @Slot(str)
     def apply_theme(self, theme_name: str) -> None:
-        palette = theme_palette(theme_name)
+        self.theme_name = normalize_theme_name(theme_name)
+        palette = theme_palette(self.theme_name, self.ui_mode)
         app = QApplication.instance()
         if app is not None:
-            app.setStyleSheet(build_app_style(theme_name))
-        self.sidebar.apply_theme(palette)
+            app.setStyleSheet(build_app_style(self.theme_name, self.ui_mode))
+        self.sidebar.apply_theme(palette, self.ui_mode)
         self.home_page.apply_theme(palette)
         self.results_page.apply_theme(palette)
         self.flow_sync_page.apply_theme(palette)
+
+    @Slot()
+    def toggle_ui_mode(self) -> None:
+        self.ui_mode = "light" if self.ui_mode == "dark" else "dark"
+        update_ini(self.settings_page.config_path, {"ui": {"mode": self.ui_mode}})
+        self.apply_theme(self.theme_name)
 
     def show_page(self, index: int) -> None:
         current_license = load_license()
@@ -2416,15 +2810,22 @@ def main() -> None:
     ensure_workspace_directories()
     app = QApplication(sys.argv)
     app.setApplicationName("SmartSheet Desk")
-    icon_path = bundled_resource("icon/cover-v4.png")
+    icon_path = bundled_resource("icon/cover-v5.png")
     if icon_path is None:
-        icon_path = Path(__file__).resolve().parents[2] / "icon" / "cover-v4.png"
+        icon_path = Path(__file__).resolve().parents[2] / "icon" / "cover-v5.png"
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
     app.setStyle("Fusion")
-    app.setStyleSheet(build_app_style(theme_name_from_config(editable_config_path())))
+    config_path = editable_config_path()
+    app.setStyleSheet(
+        build_app_style(
+            theme_name_from_config(config_path),
+            ui_mode_from_config(config_path),
+        )
+    )
     app.setFont(QFont("", 13))
     window = MainWindow()
+    center_window_on_current_screen(window)
     window.show()
     sys.exit(app.exec())
 
