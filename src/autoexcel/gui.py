@@ -54,6 +54,7 @@ from autoexcel.gui_tasks import (
     run_add_cards_task,
     run_diff_files_task,
     run_diff_task,
+    run_daily_long_sync_task,
     run_fetch_task,
     run_fill_task,
     run_full_flow_sync_task,
@@ -61,6 +62,7 @@ from autoexcel.gui_tasks import (
     run_payout_diff_task,
     run_tp_collection_sync_task,
     run_tp_payout_sync_task,
+    run_tp_withdrawal_sync_task,
     run_wallet_flow_sync_task,
 )
 from autoexcel.license import (
@@ -169,14 +171,6 @@ QLabel#cardTitle, QLabel#featuredCardTitle {
 QLabel#cardTitle { font-size: 16px; }
 QLabel#featuredCardTitle { font-size: 18px; }
 QLabel#cardDescription { color: #7a8699; font-size: 12px; }
-QLabel#cardAction {
-    color: #3157d5;
-    background: #edf2ff;
-    border-radius: 8px;
-    padding: 4px 9px;
-    font-size: 10px;
-    font-weight: 700;
-}
 QLabel#fieldLabel { color: #344054; font-size: 12px; font-weight: 700; }
 QLabel#muted, QLabel#fieldHint { color: #7a8699; }
 QLabel#fieldHint { font-size: 11px; }
@@ -211,6 +205,15 @@ QLabel#licenseValid { color: #067647; font-weight: 700; }
 QLabel#licenseInvalid { color: #b42318; font-weight: 700; }
 QFrame#homeCard:hover { border-color: #aebcf3; background: #fbfcff; }
 QFrame#homeFeaturedCard:hover { border-color: #9eafe9; background: #f4f7ff; }
+QFrame#homeFeaturedCard[syncSelectable="true"] {
+    background: #ffffff;
+    border-color: #e5e8ef;
+}
+QFrame#homeCard[syncSelected="true"],
+QFrame#homeFeaturedCard[syncSelected="true"] {
+    background: #edf2ff;
+    border: 2px solid #2f5bea;
+}
 QFrame#resultRow {
     background: #fbfcff;
     border: 1px solid #e5e8ef;
@@ -284,7 +287,44 @@ QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
     border-color: #2f5bea;
     background: #fbfcff;
 }
-QComboBox::drop-down { border: none; width: 28px; }
+QComboBox:hover { border-color: #9eafe9; }
+QComboBox:disabled {
+    color: #98a2b3;
+    background: #f0f2f5;
+    border-color: #e5e7eb;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 32px;
+}
+QComboBox QAbstractItemView {
+    color: #344054;
+    background: #ffffff;
+    border: 1px solid #d7dce5;
+    border-radius: 9px;
+    padding: 5px;
+    outline: 0;
+    selection-color: #fefefe;
+    selection-background-color: #2f5bea;
+}
+QComboBox QAbstractItemView::item {
+    min-height: 36px;
+    padding: 0 10px;
+    border: none;
+    border-radius: 6px;
+}
+QComboBox QAbstractItemView::item:hover {
+    color: #344054;
+    background: #edf2ff;
+}
+QComboBox QAbstractItemView::item:selected {
+    color: #fefefe;
+    background: #2f5bea;
+}
+QFrame#comboPopup {
+    background: transparent;
+    border: none;
+}
 QCheckBox { spacing: 9px; color: #344054; }
 QCheckBox::indicator { width: 34px; height: 18px; border-radius: 9px; background: #cbd2de; }
 QCheckBox::indicator:checked { background: #2f5bea; image: none; }
@@ -583,6 +623,14 @@ def icon_resource_path(name: str) -> Path:
     return Path(__file__).resolve().parents[2] / resource_name
 
 
+def decorative_icon_path(name: str) -> Path:
+    resource_name = f"icon/svgs/{name}.svg"
+    path = bundled_resource(resource_name)
+    if path is not None:
+        return path
+    return Path(__file__).resolve().parents[2] / resource_name
+
+
 def brand_icon_path() -> Path:
     resource_name = "icon/cover-v5.png"
     path = bundled_resource(resource_name)
@@ -607,6 +655,11 @@ def themed_svg_pixmap(name: str, color: str, size: QSize) -> QPixmap:
     svg_text = re.sub(
         r'stroke="#[0-9A-Fa-f]{6}"',
         f'stroke="{color}"',
+        svg_text,
+    )
+    svg_text = re.sub(
+        r'fill="#[0-9A-Fa-f]{6}"',
+        f'fill="{color}"',
         svg_text,
     )
     svg_text = re.sub(r'stroke-width="[^"]+"', 'stroke-width="2"', svg_text)
@@ -662,6 +715,14 @@ class WorkerSignals(QObject):
 
 
 class NoWheelComboBox(QComboBox):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        popup = self.view().window()
+        popup.setObjectName("comboPopup")
+        popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        if isinstance(popup, QFrame):
+            popup.setFrameShape(QFrame.Shape.NoFrame)
+
     def wheelEvent(self, event) -> None:
         event.ignore()
 
@@ -836,17 +897,19 @@ class HomeCard(QFrame):
         description: str,
         accent: str,
         featured: bool = False,
+        corner_icon_name: str | None = None,
     ) -> None:
         super().__init__()
         self.icon_name = icon_name
         self.featured = featured
+        self.corner_icon_name = corner_icon_name
         self.setObjectName("homeFeaturedCard" if featured else "homeCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(126)
-        self.setMaximumHeight(140)
+        self.setMinimumHeight(88)
+        self.setMaximumHeight(100)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(19, 18, 19, 17)
-        layout.setSpacing(14)
+        layout.setContentsMargins(17, 14, 17, 14)
+        layout.setSpacing(13)
         self.icon_label = QLabel()
         self.icon_label.setObjectName("cardIcon")
         self.icon_label.setFixedSize(48, 48)
@@ -856,32 +919,44 @@ class HomeCard(QFrame):
         content = QVBoxLayout()
         content.setContentsMargins(0, 0, 0, 0)
         content.setSpacing(6)
+        content.setAlignment(Qt.AlignmentFlag.AlignTop)
         heading = QHBoxLayout()
         heading.setSpacing(8)
         title_label = QLabel(title)
         title_label.setObjectName("featuredCardTitle" if featured else "cardTitle")
-        badge = QLabel(accent)
-        badge.setObjectName("statusPill")
-        badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.badge = QLabel(accent)
+        self.badge.setObjectName("statusPill")
+        self.badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.badge.setVisible(bool(accent))
         heading.addWidget(title_label)
-        heading.addWidget(badge)
+        heading.addWidget(self.badge)
         heading.addStretch()
         description_label = QLabel(description)
         description_label.setObjectName("cardDescription")
         description_label.setWordWrap(True)
-        action_label = QLabel("打开功能  →")
-        action_label.setObjectName("cardAction")
-        action_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         content.addLayout(heading)
         content.addWidget(description_label)
-        content.addStretch()
-        content.addWidget(action_label)
         layout.addLayout(content, 1)
+        self.corner_icon_label: QLabel | None = None
+        if self.corner_icon_name:
+            self.corner_icon_label = QLabel()
+            self.corner_icon_label.setFixedSize(58, 58)
+            self.corner_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(
+                self.corner_icon_label,
+                0,
+                Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
+            )
         self.apply_theme(theme_palette(DEFAULT_THEME))
 
     def apply_theme(self, palette: dict[str, str]) -> None:
         icon = themed_card_icon(self.icon_name, palette, QSize(22, 22))
         self.icon_label.setPixmap(icon.pixmap(QSize(22, 22)))
+        if self.corner_icon_label is not None and self.corner_icon_name:
+            path = decorative_icon_path(self.corner_icon_name)
+            self.corner_icon_label.setPixmap(
+                QIcon(str(path)).pixmap(QSize(54, 54)) if path.is_file() else QPixmap()
+            )
 
     def mousePressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         if event.button() == Qt.MouseButton.LeftButton:
@@ -952,7 +1027,12 @@ class HomePage(QScrollArea):
             HomeCard("card-add", "增卡", "根据模板批量创建卡号工作表。", "批量建卡"),
             HomeCard("extract", "提取B2B", "批量提取并写入 B2B 交易数据。", "交易提取"),
             HomeCard("results", "对账结果", "按生成日期查看代收与代付对账报告。", "报告归档"),
-            HomeCard("flow-sync", "流水同步", "整合 TP 代付、TP 代收和钱包流水同步。", "多源同步"),
+            HomeCard(
+                "flow-sync",
+                "流水同步",
+                "整合 TP 代付、TP 代收、TP 提现和钱包流水同步。",
+                "多源同步",
+            ),
             HomeCard("settings", "配置管理", "可视化维护全局配置和功能参数。", "系统设置"),
         ]
         self.card_page_indexes = (1, 2, 3, 4, 5, 6, 8, 7)
@@ -1091,8 +1171,8 @@ class TaskPage(QWidget):
             self.form_scroll = None
             outer.addWidget(self.form_panel)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(9)
+        self.actions = QHBoxLayout()
+        self.actions.setSpacing(9)
         self.run_button = QPushButton("开始执行")
         self.run_button.setObjectName("primary")
         self.cancel_button = QPushButton("停止")
@@ -1104,12 +1184,12 @@ class TaskPage(QWidget):
         self.open_button.clicked.connect(self.open_result)
         self.status_label = QLabel("准备就绪")
         self.status_label.setObjectName("muted")
-        actions.addWidget(self.run_button)
-        actions.addWidget(self.cancel_button)
-        actions.addWidget(self.open_button)
-        actions.addStretch()
-        actions.addWidget(self.status_label)
-        outer.addLayout(actions)
+        self.actions.addWidget(self.run_button)
+        self.actions.addWidget(self.cancel_button)
+        self.actions.addWidget(self.open_button)
+        self.actions.addStretch()
+        self.actions.addWidget(self.status_label)
+        outer.addLayout(self.actions)
 
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
@@ -1277,13 +1357,19 @@ class FlowSyncPage(TaskPage):
             "选择流水类型并上传对应文件。",
             scroll_form=True,
         )
-        self.feature_names = ("TP代付同步", "TP代收同步", "钱包流水同步")
+        self.feature_names = (
+            "TP代付同步",
+            "TP代收同步",
+            "TP提现同步",
+            "钱包流水同步",
+        )
         self.full_sync_card = HomeCard(
             "flow-sync",
             "一键流水同步",
-            "选择一个文件夹，自动识别工作簿、付款订单、两份收款订单和平台钱包流水。",
-            "推荐",
+            "选择一个文件夹，自动识别工作簿和五个来源 Excel。",
+            "",
             featured=True,
+            corner_icon_name="hello-kitty-2",
         )
         self.full_sync_card.clicked.connect(
             lambda: self.select_sync_feature("folder")
@@ -1292,15 +1378,16 @@ class FlowSyncPage(TaskPage):
         descriptions = (
             "替换工作簿中的 TP代付 明细。",
             "同步 TP 代收业务流水。",
+            "同步已打款的 TP 提现记录。",
             "同步钱包账户流水。",
         )
-        accents = ("可用", "可用", "可用")
+        accents = ("可用", "可用", "可用", "可用")
         card_container = QWidget()
         self.grid = QGridLayout(card_container)
         self.grid.setContentsMargins(0, 0, 0, 4)
         self.grid.setHorizontalSpacing(14)
         self.grid.setVerticalSpacing(14)
-        for column in range(3):
+        for column in range(4):
             self.grid.setColumnStretch(column, 1)
         self.cards: list[HomeCard] = []
         for column, (name, description, accent) in enumerate(
@@ -1311,11 +1398,22 @@ class FlowSyncPage(TaskPage):
                 card.clicked.connect(lambda: self.select_sync_feature("payout"))
             elif column == 1:
                 card.clicked.connect(lambda: self.select_sync_feature("collection"))
+            elif column == 2:
+                card.clicked.connect(lambda: self.select_sync_feature("withdrawal"))
             else:
                 card.clicked.connect(lambda: self.select_sync_feature("wallet"))
             self.grid.addWidget(card, 0, column)
             self.cards.append(card)
         self.form.addWidget(card_container)
+        self.sync_feature_cards = {
+            "folder": self.full_sync_card,
+            "payout": self.cards[0],
+            "collection": self.cards[1],
+            "withdrawal": self.cards[2],
+            "wallet": self.cards[3],
+        }
+        for card in self.sync_feature_cards.values():
+            card.setProperty("syncSelectable", True)
 
         self.sync_forms = QStackedWidget()
 
@@ -1375,6 +1473,32 @@ class FlowSyncPage(TaskPage):
             )
         )
 
+        withdrawal_form = QWidget()
+        withdrawal_layout = QVBoxLayout(withdrawal_form)
+        withdrawal_layout.setContentsMargins(0, 0, 0, 0)
+        withdrawal_layout.setSpacing(14)
+        self.withdrawal_workbook_picker = PathPicker(
+            "file", file_filter="Excel (*.xlsx)"
+        )
+        self.withdrawal_orders_picker = PathPicker(
+            "file", file_filter="Excel (*.xlsx)"
+        )
+        withdrawal_layout.addWidget(
+            FieldBlock(
+                "工作簿",
+                self.withdrawal_workbook_picker,
+                "工作簿中必须包含名为“TP提现”的工作表；"
+                "处理前请关闭 Excel/WPS。",
+            )
+        )
+        withdrawal_layout.addWidget(
+            FieldBlock(
+                "商户提现申请 Excel",
+                self.withdrawal_orders_picker,
+                "读取第 2 行表头，只同步交易状态为“已打款”的记录。",
+            )
+        )
+
         wallet_form = QWidget()
         wallet_layout = QVBoxLayout(wallet_form)
         wallet_layout.setContentsMargins(0, 0, 0, 0)
@@ -1409,19 +1533,22 @@ class FlowSyncPage(TaskPage):
             FieldBlock(
                 "同步文件夹",
                 self.flow_sync_directory_picker,
-                "文件夹中需包含工作簿、1 个付款订单、2 个收款订单和 1 个平台钱包流水 Excel。",
+                "文件夹中需包含工作簿、1 个付款订单、2 个收款订单、"
+                "1 个商户提现申请和 1 个平台钱包流水 Excel。",
             )
         )
         self.sync_forms.addWidget(payout_form)
         self.sync_forms.addWidget(collection_form)
+        self.sync_forms.addWidget(withdrawal_form)
         self.sync_forms.addWidget(wallet_form)
         self.sync_forms.addWidget(folder_form)
         self.form.addWidget(self.sync_forms)
 
         self.active_sync_feature = "folder"
-        self.sync_forms.setCurrentIndex(3)
+        self.sync_forms.setCurrentIndex(4)
         self.run_button.setText("开始一键流水同步")
         self.run_button.clicked.connect(self.run_sync)
+        self.update_sync_card_selection()
 
     def focus_tp_payout(self) -> None:
         self.select_sync_feature("payout")
@@ -1431,25 +1558,37 @@ class FlowSyncPage(TaskPage):
         feature_indexes = {
             "payout": 0,
             "collection": 1,
-            "wallet": 2,
-            "folder": 3,
+            "withdrawal": 2,
+            "wallet": 3,
+            "folder": 4,
         }
         button_labels = {
             "payout": "开始 TP代付同步",
             "collection": "开始 TP代收同步",
+            "withdrawal": "开始 TP提现同步",
             "wallet": "开始钱包流水同步",
             "folder": "开始一键流水同步",
         }
         self.sync_forms.setCurrentIndex(feature_indexes[feature])
         self.run_button.setText(button_labels[feature])
+        self.update_sync_card_selection()
         if feature == "payout":
             self.workbook_picker.edit.setFocus()
         elif feature == "collection":
             self.collection_workbook_picker.edit.setFocus()
+        elif feature == "withdrawal":
+            self.withdrawal_workbook_picker.edit.setFocus()
         elif feature == "wallet":
             self.wallet_workbook_picker.edit.setFocus()
         else:
             self.flow_sync_directory_picker.edit.setFocus()
+
+    def update_sync_card_selection(self) -> None:
+        for feature, card in self.sync_feature_cards.items():
+            card.setProperty("syncSelected", feature == self.active_sync_feature)
+            card.style().unpolish(card)
+            card.style().polish(card)
+            card.update()
 
     def run_sync(self) -> None:
         if not load_license().allows(FEATURE_ORDER_DIFF):
@@ -1463,6 +1602,8 @@ class FlowSyncPage(TaskPage):
             self.run_full_flow_sync()
         elif self.active_sync_feature == "collection":
             self.run_tp_collection()
+        elif self.active_sync_feature == "withdrawal":
+            self.run_tp_withdrawal()
         elif self.active_sync_feature == "wallet":
             self.run_wallet_flow()
         else:
@@ -1477,7 +1618,7 @@ class FlowSyncPage(TaskPage):
             QMessageBox.warning(
                 self,
                 "文件夹未选择",
-                "请选择包含工作簿和四个来源 Excel 的文件夹。",
+                "请选择包含工作簿和五个来源 Excel 的文件夹。",
             )
             return
         directory = Path(directory_text).expanduser()
@@ -1531,6 +1672,26 @@ class FlowSyncPage(TaskPage):
             )
         )
 
+    def run_tp_withdrawal(self) -> None:
+        workbook_text = self.withdrawal_workbook_picker.edit.text().strip()
+        withdrawal_orders_text = self.withdrawal_orders_picker.edit.text().strip()
+        if not workbook_text or not withdrawal_orders_text:
+            QMessageBox.warning(
+                self,
+                "文件未选择",
+                "请选择工作簿和商户提现申请 Excel 文件。",
+            )
+            return
+        workbook = Path(workbook_text).expanduser()
+        withdrawal_orders = Path(withdrawal_orders_text).expanduser()
+        self.start_task(
+            lambda log: run_tp_withdrawal_sync_task(
+                workbook,
+                withdrawal_orders,
+                log,
+            )
+        )
+
     def run_wallet_flow(self) -> None:
         workbook_text = self.wallet_workbook_picker.edit.text().strip()
         wallet_flow_text = self.wallet_flow_picker.edit.text().strip()
@@ -1564,9 +1725,24 @@ class FillPage(TaskPage):
         self.date_picker = DatePicker(default_target_date())
         self.add_field("工作簿", self.path_picker, "处理前请关闭 Excel/WPS 中正在打开的目标文件。")
         self.add_field("目标日期", self.date_picker)
+        self.daily_long_sync_button = QPushButton("当日长款数据同步")
+        self.daily_long_sync_button.setObjectName("primary")
+        self.daily_long_sync_button.setMinimumWidth(170)
+        self.daily_long_sync_button.clicked.connect(self.run_daily_long_sync)
+        self.actions.insertWidget(1, self.daily_long_sync_button)
         self.run_button.clicked.connect(self.run)
 
+    def run_daily_long_sync(self) -> None:
+        self.daily_long_sync_button.setEnabled(False)
+        self.start_task(
+            lambda log: run_daily_long_sync_task(
+                self.path_picker.path(),
+                log,
+            )
+        )
+
     def run(self) -> None:
+        self.daily_long_sync_button.setEnabled(False)
         limit_sheets = read_fill_limit_sheets(editable_config_path())
         self.start_task(
             lambda log: run_fill_task(
@@ -1576,6 +1752,11 @@ class FillPage(TaskPage):
                 limit_sheets=limit_sheets,
             )
         )
+
+    @Slot()
+    def task_finished(self) -> None:
+        super().task_finished()
+        self.daily_long_sync_button.setEnabled(True)
 
 
 class DiffPage(TaskPage):
@@ -2284,6 +2465,7 @@ class SettingsPage(QWidget):
         super().__init__()
         self.config_path = editable_config_path()
         self.controls: dict[tuple[str, str], QWidget] = {}
+        self._saved_values: dict[tuple[str, str], str] = {}
         outer = QVBoxLayout(self)
         outer.setContentsMargins(40, 30, 40, 24)
         outer.setSpacing(14)
@@ -2499,10 +2681,11 @@ class SettingsPage(QWidget):
             elif isinstance(control, QComboBox):
                 selected_index = control.findData(normalize_theme_name(value))
                 control.setCurrentIndex(max(selected_index, 0))
+        self._saved_values = self.current_values()
 
-    def save_values(self) -> None:
-        updates: dict[str, dict[str, str]] = {}
-        for (section, option), control in self.controls.items():
+    def current_values(self) -> dict[tuple[str, str], str]:
+        values: dict[tuple[str, str], str] = {}
+        for key, control in self.controls.items():
             if isinstance(control, QLineEdit):
                 value = control.text().strip()
             elif isinstance(control, QDoubleSpinBox):
@@ -2512,9 +2695,24 @@ class SettingsPage(QWidget):
             elif isinstance(control, QComboBox):
                 value = str(control.currentData())
             else:
-                value = "true" if isinstance(control, QCheckBox) and control.isChecked() else "false"
+                value = (
+                    "true"
+                    if isinstance(control, QCheckBox) and control.isChecked()
+                    else "false"
+                )
+            values[key] = value
+        return values
+
+    def has_unsaved_changes(self) -> bool:
+        return self.current_values() != self._saved_values
+
+    def save_values(self) -> None:
+        updates: dict[str, dict[str, str]] = {}
+        values = self.current_values()
+        for (section, option), value in values.items():
             updates.setdefault(section, {})[option] = value
         update_ini(self.config_path, updates)
+        self._saved_values = values
         QMessageBox.information(self, "配置已保存", f"已更新 {self.config_path}")
 
     def emit_theme_change(self, _index: int = -1) -> None:
@@ -2777,6 +2975,27 @@ class MainWindow(QMainWindow):
         }.get(index)
         if required_feature and not self.license_info.allows(required_feature):
             return
+        if (
+            index != 7
+            and self.pages.currentIndex() == 7
+            and self.settings_page.has_unsaved_changes()
+        ):
+            answer = QMessageBox.question(
+                self,
+                "配置尚未保存",
+                "配置管理中有未保存的修改。是否保存后再切换功能？",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save,
+            )
+            if answer == QMessageBox.StandardButton.Save:
+                self.settings_page.save_values()
+            elif answer == QMessageBox.StandardButton.Discard:
+                self.settings_page.load_values()
+            else:
+                self.sidebar.select(7)
+                return
         self.pages.setCurrentIndex(index)
         self.sidebar.select(index)
         if index == 6:

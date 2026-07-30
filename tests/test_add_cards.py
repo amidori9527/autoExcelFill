@@ -44,6 +44,7 @@ class AddCardsTest(unittest.TestCase):
             template["A2"] = "日期"
             template["B2"] = "期初余额"
             template["C2"] = "代收金额"
+            template["M2"] = "差值"
             template["N2"] = "增量"
             template["A4"] = 46210
             template["B4"] = 123
@@ -62,7 +63,7 @@ class AddCardsTest(unittest.TestCase):
             for card in ("1234", "3121"):
                 sheet = updated[card]
                 self.assertEqual(sheet["B3"].value, 0)
-                self.assertEqual(sheet["N3"].value, 0)
+                self.assertEqual(sheet["N3"].value, "=M3")
                 self.assertEqual(sheet["C3"].value, "=B3+10")
                 self.assertEqual(sheet["A1"].value, "=SHEETSNAME(A1)")
                 self.assertEqual(sheet.max_row, 3)
@@ -78,6 +79,7 @@ class AddCardsTest(unittest.TestCase):
             template["A1"] = "模板"
             template["A2"] = "日期"
             template["B2"] = "期初余额"
+            template["M2"] = "差值"
             template["N2"] = "增量"
             template["A3"] = 46210
             workbook.save(workbook_path)

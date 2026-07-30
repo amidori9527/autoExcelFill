@@ -359,7 +359,7 @@ def _advance_summary_table_sheet_xml(
         opening_balance_cell = _ensure_cell(source_row, "B")
         _set_formula_cell_value(
             opening_balance_cell,
-            f"P{source_row_number + 1}",
+            f"R{source_row_number}",
         )
 
     insert_at = list(sheet_data).index(source_row)

@@ -21,6 +21,7 @@ a = Analysis(
         ("icon/cover-v5.png", "icon"),
         ("icon/baby-rabbit.webp", "icon"),
         ("icon/sidebar", "icon/sidebar"),
+        ("icon/svgs/hello-kitty-2.svg", "icon/svgs"),
         ("config.ini", "."),
         ("loginConf.example.ini", "."),
         ("VERSION.txt", "."),

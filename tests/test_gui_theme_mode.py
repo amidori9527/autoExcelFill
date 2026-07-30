@@ -8,11 +8,13 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QFrame
 
 from autoexcel.config_editor import read_ini
 from autoexcel.gui import (
     MainWindow,
+    NoWheelComboBox,
     build_app_style,
     normalize_ui_mode,
     ui_mode_from_config,
@@ -41,6 +43,28 @@ class GuiThemeModeTest(unittest.TestCase):
         self.assertIn("#111522", style)
         self.assertIn("#181d2a", style)
         self.assertIn("#f5f7fb", style)
+
+    def test_combo_popup_uses_themed_item_states(self) -> None:
+        light_style = build_app_style("indigo", "light")
+        dark_style = build_app_style("indigo", "dark")
+
+        self.assertIn("QComboBox QAbstractItemView::item:hover", light_style)
+        self.assertIn("QComboBox QAbstractItemView::item:selected", light_style)
+        self.assertIn("selection-color: #ffffff", light_style)
+        self.assertIn("selection-background-color: #6673d9", light_style)
+        self.assertIn("background: #181d2a", dark_style)
+        self.assertIn("selection-background-color: #7c88f2", dark_style)
+
+    def test_combo_popup_has_no_native_frame(self) -> None:
+        combo = NoWheelComboBox()
+        popup = combo.view().window()
+
+        self.assertEqual(popup.objectName(), "comboPopup")
+        self.assertTrue(
+            popup.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        )
+        self.assertIsInstance(popup, QFrame)
+        self.assertEqual(popup.frameShape(), QFrame.Shape.NoFrame)
 
     def test_sidebar_button_toggles_and_persists_mode(self) -> None:
         with TemporaryDirectory() as temporary_directory:

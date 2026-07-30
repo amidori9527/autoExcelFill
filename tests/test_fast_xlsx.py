@@ -117,7 +117,7 @@ class IncomeSheetFastTest(unittest.TestCase):
             self.assertEqual(updated_b2b.tables["B2BTable"].ref, "A2:O5")
             self.assertTrue(updated_b2b["E7"].has_style)
 
-    def test_daily_balance_opening_balance_references_same_row_column_p(self) -> None:
+    def test_daily_balance_opening_balance_references_previous_row_column_r(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             workbook_path = Path(temporary_directory) / "daily-balance.xlsx"
             workbook = Workbook()
@@ -140,7 +140,7 @@ class IncomeSheetFastTest(unittest.TestCase):
 
             self.assertTrue(result.changed)
             updated = load_workbook(workbook_path, data_only=False)["每日余额监测"]
-            self.assertEqual(updated["B3"].value, "=P3")
+            self.assertEqual(updated["B3"].value, "=R2")
 
 
 if __name__ == "__main__":

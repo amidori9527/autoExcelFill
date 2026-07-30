@@ -9,28 +9,60 @@ from unittest.mock import patch
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.table import Table
 
+from autoexcel.daily_long_sync import DailyLongSyncResult
 from autoexcel.flow_sync import (
     FlowSyncFiles,
     FullFlowSyncResult,
     TpCollectionSyncResult,
     TpPayoutSyncResult,
+    TpWithdrawalSyncResult,
 )
 from autoexcel.gui_tasks import (
     _jobs_from_directory,
+    run_daily_long_sync_task,
     run_fill_task,
     run_full_flow_sync_task,
     run_tp_collection_sync_task,
     run_tp_payout_sync_task,
+    run_tp_withdrawal_sync_task,
     run_wallet_flow_sync_task,
 )
 
 
 class GuiTasksTest(unittest.TestCase):
+    def test_daily_long_sync_task_reports_inserted_and_skipped_rows(self) -> None:
+        result = DailyLongSyncResult(
+            source_rows=12,
+            inserted_rows=10,
+            skipped_rows=2,
+            old_summary_row=100,
+            new_summary_row=110,
+            repaired_formula_rows=99,
+        )
+
+        with patch(
+            "autoexcel.gui_tasks.daily_long_sync.sync_daily_long",
+            return_value=result,
+        ) as sync:
+            task_result = run_daily_long_sync_task(
+                Path("/tmp/workbook.xlsx"),
+                lambda _message: None,
+            )
+
+        sync.assert_called_once()
+        self.assertEqual(task_result.title, "当日长款数据同步完成")
+        self.assertIn("识别当日长款 12 条", task_result.summary)
+        self.assertIn("新增 10 条", task_result.summary)
+        self.assertIn("重复跳过 2 条", task_result.summary)
+        self.assertIn("修复“是否补单”公式 99 行", task_result.summary)
+        self.assertEqual(task_result.output_path, Path("/tmp/workbook.xlsx"))
+
     def test_full_flow_sync_task_reports_all_row_counts(self) -> None:
         directory = Path("/tmp/flow-sync")
         workbook = directory / "对账结果.xlsx"
         payout = TpPayoutSyncResult(10, 14, 11, 15, 18, 4)
         collection = TpCollectionSyncResult(20, 12, 21, 13, 30, 0, 10, 2)
+        withdrawal = TpWithdrawalSyncResult(16, 3, 17, 4, 19, 0, 2)
         wallet = TpPayoutSyncResult(30, 18, 31, 19, 40, 0)
         result = FullFlowSyncResult(
             files=FlowSyncFiles(
@@ -41,10 +73,12 @@ class GuiTasksTest(unittest.TestCase):
                     directory / "收款订单1.xlsx",
                     directory / "收款订单2.xlsx",
                 ),
+                withdrawal_orders=directory / "商户提现申请.xlsx",
                 wallet_flow=directory / "平台钱包流水.xlsx",
             ),
             payout=payout,
             collection=collection,
+            withdrawal=withdrawal,
             wallet=wallet,
         )
 
@@ -61,6 +95,7 @@ class GuiTasksTest(unittest.TestCase):
         self.assertEqual(task_result.title, "一键流水同步完成")
         self.assertIn("TP代付 14 条", task_result.summary)
         self.assertIn("TP代收 12 条", task_result.summary)
+        self.assertIn("TP提现 3 条", task_result.summary)
         self.assertIn("钱包流水 18 条", task_result.summary)
         self.assertEqual(task_result.output_path, workbook)
 
@@ -117,6 +152,32 @@ class GuiTasksTest(unittest.TestCase):
         self.assertIn("写入 12 条", task_result.summary)
         self.assertIn("支付成功 10 条", task_result.summary)
         self.assertIn("部分支付 2 条", task_result.summary)
+
+    def test_tp_withdrawal_sync_task_reports_status_counts(self) -> None:
+        result = TpWithdrawalSyncResult(
+            removed_rows=16,
+            inserted_rows=3,
+            old_detail_end_row=17,
+            new_detail_end_row=4,
+            summary_row=19,
+            shifted_rows=0,
+            skipped_rows=2,
+        )
+
+        with patch(
+            "autoexcel.gui_tasks.flow_sync.sync_tp_withdrawal",
+            return_value=result,
+        ) as sync:
+            task_result = run_tp_withdrawal_sync_task(
+                Path("/tmp/workbook.xlsx"),
+                Path("/tmp/withdrawal.xlsx"),
+                lambda _message: None,
+            )
+
+        sync.assert_called_once()
+        self.assertEqual(task_result.title, "TP提现同步完成")
+        self.assertIn("写入 3 条", task_result.summary)
+        self.assertIn("跳过 2 条", task_result.summary)
 
     def test_tp_payout_sync_task_reports_dynamic_ranges(self) -> None:
         result = TpPayoutSyncResult(

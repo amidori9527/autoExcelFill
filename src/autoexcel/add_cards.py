@@ -22,6 +22,7 @@ from autoexcel.fast_xlsx import (
     _has_tab_color,
     _row_number,
     _set_row_number,
+    _set_formula_cell_value,
     _set_numeric_cell_value,
     _sheet_target_path,
     _split_cell_ref,
@@ -76,7 +77,10 @@ def _shared_strings(archive: zipfile.ZipFile) -> list[str]:
     return ["".join(node.text or "" for node in item.findall(f".//{_tag('t')}")) for item in root.findall(_tag("si"))]
 
 
-def _template_columns(root: ET.Element, shared_strings: list[str]) -> tuple[str, str]:
+def _template_columns(
+    root: ET.Element,
+    shared_strings: list[str],
+) -> tuple[str, str, str]:
     sheet_data = root.find(_tag("sheetData"))
     if sheet_data is None:
         raise ValueError("模板没有工作表数据")
@@ -87,11 +91,13 @@ def _template_columns(root: ET.Element, shared_strings: list[str]) -> tuple[str,
     for cell in header.findall(_tag("c")):
         ref = cell.attrib.get("r")
         text = _cell_text(cell, shared_strings)
-        if ref and text in {"期初余额", "增量"}:
+        if ref and text in {"期初余额", "增量", "差值"}:
             columns[text] = _split_cell_ref(ref)[0]
-    if "期初余额" not in columns or "增量" not in columns:
-        raise ValueError("模板第 2 行缺少“期初余额”或“增量”列")
-    return columns["期初余额"], columns["增量"]
+    required_columns = ("期初余额", "增量", "差值")
+    missing_columns = [name for name in required_columns if name not in columns]
+    if missing_columns:
+        raise ValueError(f"模板第 2 行缺少“{'、'.join(missing_columns)}”列")
+    return columns["期初余额"], columns["增量"], columns["差值"]
 
 
 def _card_sheet_xml(
@@ -99,7 +105,10 @@ def _card_sheet_xml(
     shared_strings: list[str],
 ) -> bytes:
     root = ET.fromstring(template_xml)
-    opening_balance_column, increment_column = _template_columns(root, shared_strings)
+    opening_balance_column, increment_column, difference_column = _template_columns(
+        root,
+        shared_strings,
+    )
     sheet_data = root.find(_tag("sheetData"))
     if sheet_data is None:
         raise ValueError("模板没有工作表数据")
@@ -121,7 +130,10 @@ def _card_sheet_xml(
         _translate_formulas(copied_last_row, source_last_row_number, 3)
         _set_row_number(copied_last_row, 3)
     _set_numeric_cell_value(_ensure_cell(copied_last_row, opening_balance_column), 0)
-    _set_numeric_cell_value(_ensure_cell(copied_last_row, increment_column), 0)
+    _set_formula_cell_value(
+        _ensure_cell(copied_last_row, increment_column),
+        f"{difference_column}3",
+    )
 
     for row in list(sheet_data):
         sheet_data.remove(row)
@@ -162,10 +174,7 @@ def parse_card_numbers(text: str) -> list[str]:
     return [card.strip() for card in text.splitlines() if card.strip()]
 
 
-def read_card_numbers_from_terminal() -> list[str]:
-    if not sys.stdin.isatty():
-        raise RuntimeError("增卡需要在可输入的终端中运行。")
-
+def _read_card_numbers_windows() -> list[str]:
     print("请粘贴多行卡号；粘贴完成后，在空白行按 Enter 提交。")
     print("示例：1234、3121、1341 每个卡号一行。")
     rows: list[str] = []
@@ -174,6 +183,12 @@ def read_card_numbers_from_terminal() -> list[str]:
         if not raw.strip():
             return parse_card_numbers("\n".join(rows))
         rows.append(raw)
+
+
+def read_card_numbers_from_terminal() -> list[str]:
+    if not sys.stdin.isatty():
+        raise RuntimeError("增卡需要在可输入的终端中运行。")
+    return _read_card_numbers_windows()
 
 
 def add_cards_to_workbook(xlsx_path: Path, card_numbers: list[str]) -> AddCardsResult:

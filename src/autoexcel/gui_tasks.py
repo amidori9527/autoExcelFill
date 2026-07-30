@@ -6,7 +6,15 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Callable
 
-from autoexcel import add_b2b, add_cards, diff_orders, fetch_orders, flow_sync, payout_diff
+from autoexcel import (
+    add_b2b,
+    add_cards,
+    daily_long_sync,
+    diff_orders,
+    fetch_orders,
+    flow_sync,
+    payout_diff,
+)
 from autoexcel.fast_xlsx import (
     add_current_date_to_colored_sheets_fast,
     advance_summary_table_sheet_fast,
@@ -30,9 +38,10 @@ def run_full_flow_sync_task(
 ) -> TaskResult:
     result = flow_sync.sync_all_flows(directory, progress=log)
     summary = (
-        "三项流水同步完成："
+        "四项流水同步完成："
         f"TP代付 {result.payout.inserted_rows} 条，"
         f"TP代收 {result.collection.inserted_rows} 条，"
+        f"TP提现 {result.withdrawal.inserted_rows} 条，"
         f"钱包流水 {result.wallet.inserted_rows} 条。"
     )
     return TaskResult("一键流水同步完成", summary, result.files.workbook)
@@ -107,6 +116,26 @@ def run_tp_collection_sync_task(
     return TaskResult("TP代收同步完成", summary, workbook)
 
 
+def run_tp_withdrawal_sync_task(
+    workbook: Path,
+    withdrawal_orders: Path,
+    log: LogCallback,
+) -> TaskResult:
+    result = flow_sync.sync_tp_withdrawal(
+        workbook,
+        withdrawal_orders,
+        progress=log,
+    )
+    summary = (
+        f"已清除 {result.removed_rows} 条历史明细，"
+        f"写入 {result.inserted_rows} 条已打款提现记录，"
+        f"跳过 {result.skipped_rows} 条其他状态记录。"
+    )
+    if result.shifted_rows:
+        summary += f" 汇总区已下移 {result.shifted_rows} 行。"
+    return TaskResult("TP提现同步完成", summary, workbook)
+
+
 def run_wallet_flow_sync_task(
     workbook: Path,
     wallet_flow: Path,
@@ -120,6 +149,22 @@ def run_wallet_flow_sync_task(
     if result.shifted_rows:
         summary += f" 汇总区已下移 {result.shifted_rows} 行。"
     return TaskResult("钱包流水同步完成", summary, workbook)
+
+
+def run_daily_long_sync_task(
+    workbook: Path,
+    log: LogCallback,
+) -> TaskResult:
+    result = daily_long_sync.sync_daily_long(workbook, progress=log)
+    summary = (
+        f"识别当日长款 {result.source_rows} 条，"
+        f"新增 {result.inserted_rows} 条，"
+        f"重复跳过 {result.skipped_rows} 条。"
+    )
+    if result.repaired_formula_rows:
+        summary += f" 修复“是否补单”公式 {result.repaired_formula_rows} 行。"
+    summary += f" 汇总行现位于第 {result.new_summary_row} 行。"
+    return TaskResult("当日长款数据同步完成", summary, workbook)
 
 
 def run_fill_task(
