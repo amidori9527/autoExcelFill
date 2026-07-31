@@ -9,13 +9,14 @@ from threading import Event
 from typing import Callable
 
 from PySide6.QtCore import QByteArray, QDate, QLocale, QObject, QRect, QRectF, QRunnable, QSize, QThreadPool, Qt, QUrl, Signal, Slot
-from PySide6.QtGui import QCursor, QDesktopServices, QFont, QIcon, QMovie, QPainter, QPixmap
+from PySide6.QtGui import QColor, QCursor, QDesktopServices, QFont, QIcon, QMovie, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
     QCalendarWidget,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
@@ -1291,7 +1292,7 @@ class PathPicker(QWidget):
         self.mode = mode
         self.file_filter = file_filter
         self.allowed_suffixes = tuple(suffix.lower() for suffix in allowed_suffixes)
-        self.setAcceptDrops(mode == "file")
+        self.setAcceptDrops(mode in {"file", "directory"})
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(7)
@@ -1300,9 +1301,9 @@ class PathPicker(QWidget):
         self.edit.setPlaceholderText(
             f"可点击浏览或拖入 {suffix_hint} 文件"
             if mode == "file"
-            else "请选择路径"
+            else "可点击浏览或拖入文件夹"
         )
-        if mode == "file":
+        if mode in {"file", "directory"}:
             self.edit.setAcceptDrops(False)
         button = QPushButton("浏览…")
         button.clicked.connect(self.choose)
@@ -1322,7 +1323,7 @@ class PathPicker(QWidget):
             self.edit.setText(selected)
 
     def dragEnterEvent(self, event) -> None:
-        if self.mode == "file" and event.mimeData().hasUrls():
+        if self.mode in {"file", "directory"} and event.mimeData().hasUrls():
             event.acceptProposedAction()
             return
         event.ignore()
@@ -1334,10 +1335,27 @@ class PathPicker(QWidget):
             if url.isLocalFile()
         ]
         if len(paths) != 1:
-            QMessageBox.warning(self, "无法添加文件", "请一次拖入一个文件。")
+            item_name = "文件夹" if self.mode == "directory" else "文件"
+            QMessageBox.warning(
+                self,
+                f"无法添加{item_name}",
+                f"请一次拖入一个{item_name}。",
+            )
             event.ignore()
             return
         path = paths[0]
+        if self.mode == "directory":
+            if not path.is_dir():
+                QMessageBox.warning(
+                    self,
+                    "文件夹无效",
+                    "请拖入一个有效的文件夹。",
+                )
+                event.ignore()
+                return
+            self.edit.setText(str(path))
+            event.acceptProposedAction()
+            return
         if not path.is_file() or path.suffix.lower() not in self.allowed_suffixes:
             suffixes = " / ".join(self.allowed_suffixes)
             QMessageBox.warning(
@@ -1357,6 +1375,9 @@ class FlowSyncPage(TaskPage):
             "选择流水类型并上传对应文件。",
             scroll_form=True,
         )
+        self.form_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self.feature_names = (
             "TP代付同步",
             "TP代收同步",
@@ -1366,7 +1387,7 @@ class FlowSyncPage(TaskPage):
         self.full_sync_card = HomeCard(
             "flow-sync",
             "一键流水同步",
-            "选择一个文件夹，自动识别工作簿和五个来源 Excel。",
+            "选择文件夹，自动识别工作簿和四至五个来源 Excel。",
             "",
             featured=True,
             corner_icon_name="hello-kitty-2",
@@ -1394,6 +1415,15 @@ class FlowSyncPage(TaskPage):
             zip(self.feature_names, descriptions, accents)
         ):
             card = HomeCard("flow-sync", name, description, accent)
+            card.setMinimumWidth(0)
+            card.setSizePolicy(
+                QSizePolicy.Policy.Ignored,
+                QSizePolicy.Policy.Fixed,
+            )
+            card.layout().setContentsMargins(10, 10, 10, 10)
+            card.layout().setSpacing(8)
+            card.icon_label.setFixedSize(36, 36)
+            card.badge.setStyleSheet("padding: 2px 5px; font-size: 8px;")
             if column == 0:
                 card.clicked.connect(lambda: self.select_sync_feature("payout"))
             elif column == 1:
@@ -1534,7 +1564,7 @@ class FlowSyncPage(TaskPage):
                 "同步文件夹",
                 self.flow_sync_directory_picker,
                 "文件夹中需包含工作簿、1 个付款订单、2 个收款订单、"
-                "1 个商户提现申请和 1 个平台钱包流水 Excel。",
+                "1 个平台钱包流水 Excel；商户提现申请可选。",
             )
         )
         self.sync_forms.addWidget(payout_form)
@@ -1618,7 +1648,7 @@ class FlowSyncPage(TaskPage):
             QMessageBox.warning(
                 self,
                 "文件夹未选择",
-                "请选择包含工作簿和五个来源 Excel 的文件夹。",
+                "请选择包含工作簿和四至五个来源 Excel 的文件夹。",
             )
             return
         directory = Path(directory_text).expanduser()
@@ -2090,9 +2120,70 @@ class AddCardsPage(TaskPage):
         self.cards_input = QPlainTextEdit()
         self.cards_input.setMinimumHeight(170)
         self.cards_input.setPlaceholderText("1234\n3121\n1341")
+        self.sheet_color_mode = NoWheelComboBox()
+        self.sheet_color_mode.addItem("指定颜色", "selected")
+        self.sheet_color_mode.addItem("每张卡随机颜色", "random")
+        self.selected_sheet_color = "#3157D5"
+        self.sheet_color_button = QPushButton()
+        self.sheet_color_button.setFixedSize(210, 40)
+        self.sheet_color_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
         self.add_field("工作簿", self.path_picker, "处理前请关闭 Excel/WPS 中的目标文件。")
         self.add_field("卡号", self.cards_input, "每行一个卡号；重复或已存在的卡号会自动跳过。")
+        self.add_field(
+            "颜色方式",
+            self.sheet_color_mode,
+            "随机模式会为每张新卡分配不同的彩色标签，并排除黑色和白色。",
+        )
+        self.add_field(
+            "指定颜色",
+            self.sheet_color_button,
+            "点击打开系统颜色选择器；随机模式下无需选择。",
+        )
+        self.sheet_color_mode.currentIndexChanged.connect(
+            self._refresh_sheet_color_controls
+        )
+        self.sheet_color_button.clicked.connect(self._choose_sheet_color)
+        self._refresh_sheet_color_controls()
         self.run_button.clicked.connect(self.run)
+
+    def _choose_sheet_color(self) -> None:
+        color = QColorDialog.getColor(
+            QColor(self.selected_sheet_color),
+            self,
+            "选择 Sheet 标签颜色",
+        )
+        if not color.isValid():
+            return
+        self.selected_sheet_color = color.name().upper()
+        self._refresh_sheet_color_controls()
+
+    def _refresh_sheet_color_controls(self) -> None:
+        is_selected = self.sheet_color_mode.currentData() == "selected"
+        self.sheet_color_button.setEnabled(is_selected)
+        self.sheet_color_button.setText(
+            f"选择颜色  {self.selected_sheet_color}"
+        )
+        red = int(self.selected_sheet_color[1:3], 16)
+        green = int(self.selected_sheet_color[3:5], 16)
+        blue = int(self.selected_sheet_color[5:7], 16)
+        text_color = (
+            "#172033"
+            if red * 299 + green * 587 + blue * 114 > 150000
+            else "#ffffff"
+        )
+        self.sheet_color_button.setStyleSheet(
+            "QPushButton {"
+            f"background: {self.selected_sheet_color};"
+            f"color: {text_color};"
+            "border: 1px solid #94a3b8;"
+            "border-radius: 8px;"
+            "padding: 8px 14px;"
+            "font-weight: 700;"
+            "}"
+        )
 
     def run(self) -> None:
         if not load_license().allows(FEATURE_ADD_CARDS):
@@ -2100,8 +2191,21 @@ class AddCardsPage(TaskPage):
             return
         workbook = self.path_picker.path()
         cards_text = self.cards_input.toPlainText()
+        random_sheet_colors = (
+            self.sheet_color_mode.currentData() == "random"
+        )
         self.start_task(
-            lambda log: run_add_cards_task(workbook, cards_text, log)
+            lambda log: run_add_cards_task(
+                workbook,
+                cards_text,
+                log,
+                sheet_color=(
+                    None
+                    if random_sheet_colors
+                    else self.selected_sheet_color
+                ),
+                random_sheet_colors=random_sheet_colors,
+            )
         )
 
 

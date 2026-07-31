@@ -1,1 +1,1 @@
-AutoExcelKit 0.1.4
+AutoExcelKit 1.0.5

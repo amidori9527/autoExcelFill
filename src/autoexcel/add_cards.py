@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import os
 from pathlib import Path, PurePosixPath
+import random
 import re
 import sys
 import tempfile
@@ -38,6 +39,25 @@ WORKSHEET_REL_TYPE = (
 )
 CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
 INVALID_SHEET_NAME_RE = re.compile(r"[:\\\\/?*\[\]]")
+SHEET_COLOR_RE = re.compile(r"[0-9A-Fa-f]{6}")
+RANDOM_SHEET_TAB_COLORS = (
+    "2563EB",
+    "4F46E5",
+    "7C3AED",
+    "A855F7",
+    "DB2777",
+    "E11D48",
+    "DC2626",
+    "EA580C",
+    "D97706",
+    "CA8A04",
+    "65A30D",
+    "16A34A",
+    "059669",
+    "0D9488",
+    "0891B2",
+    "0284C7",
+)
 
 ET.register_namespace("", CONTENT_TYPES_NS)
 
@@ -146,6 +166,30 @@ def _card_sheet_xml(
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
+def _normalize_sheet_color(color: str | None) -> str | None:
+    if color is None:
+        return None
+    normalized = color.strip().removeprefix("#").upper()
+    if not SHEET_COLOR_RE.fullmatch(normalized):
+        raise ValueError("Sheet 标签颜色必须是 6 位十六进制颜色")
+    return normalized
+
+
+def _sheet_xml_with_tab_color(sheet_xml: bytes, color: str) -> bytes:
+    root = ET.fromstring(sheet_xml)
+    sheet_properties = root.find(_tag("sheetPr"))
+    if sheet_properties is None:
+        sheet_properties = ET.Element(_tag("sheetPr"))
+        root.insert(0, sheet_properties)
+    tab_color = sheet_properties.find(_tag("tabColor"))
+    if tab_color is None:
+        tab_color = ET.Element(_tag("tabColor"))
+        sheet_properties.insert(0, tab_color)
+    tab_color.attrib.clear()
+    tab_color.set("rgb", f"FF{color}")
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
 def _valid_card_name(name: str) -> str | None:
     if not name:
         return "empty card number"
@@ -191,12 +235,20 @@ def read_card_numbers_from_terminal() -> list[str]:
     return _read_card_numbers_windows()
 
 
-def add_cards_to_workbook(xlsx_path: Path, card_numbers: list[str]) -> AddCardsResult:
+def add_cards_to_workbook(
+    xlsx_path: Path,
+    card_numbers: list[str],
+    sheet_color: str | None = None,
+    random_sheet_colors: bool = False,
+) -> AddCardsResult:
     """Insert card sheets before the first non-Chinese sheet with a tab color."""
     if not xlsx_path.is_file():
         raise FileNotFoundError(f"Excel 文件不存在：{xlsx_path}")
     if xlsx_path.suffix.lower() != ".xlsx":
         raise ValueError("请选择 .xlsx 文件")
+    normalized_sheet_color = _normalize_sheet_color(sheet_color)
+    if normalized_sheet_color is not None and random_sheet_colors:
+        raise ValueError("指定颜色和随机颜色不能同时启用")
 
     cards = [card.strip() for card in card_numbers if card.strip()]
     with zipfile.ZipFile(xlsx_path, "r") as archive:
@@ -258,6 +310,7 @@ def add_cards_to_workbook(xlsx_path: Path, card_numbers: list[str]) -> AddCardsR
         )
         sheet_id = max((int(sheet.attrib.get("sheetId", "0")) for sheet in sheets.findall(_tag("sheet"))), default=0) + 1
         new_parts: dict[str, bytes] = {}
+        previous_random_color: str | None = None
         for card in created:
             sheet_path = f"xl/worksheets/sheet{sheet_number}.xml"
             relationship_id = f"rId{relationship_number}"
@@ -271,7 +324,20 @@ def add_cards_to_workbook(xlsx_path: Path, card_numbers: list[str]) -> AddCardsR
                 {"name": card, "sheetId": str(sheet_id), rel_attr: relationship_id},
             )
             sheets.insert(list(sheets).index(template_sheet), new_sheet)
-            new_parts[sheet_path] = new_sheet_xml
+            tab_color = normalized_sheet_color
+            if random_sheet_colors:
+                choices = [
+                    color
+                    for color in RANDOM_SHEET_TAB_COLORS
+                    if color != previous_random_color
+                ]
+                tab_color = random.choice(choices)
+                previous_random_color = tab_color
+            new_parts[sheet_path] = (
+                _sheet_xml_with_tab_color(new_sheet_xml, tab_color)
+                if tab_color is not None
+                else new_sheet_xml
+            )
             sheet_number += 1
             relationship_number += 1
             sheet_id += 1

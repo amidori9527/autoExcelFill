@@ -37,22 +37,38 @@ def run_full_flow_sync_task(
     log: LogCallback,
 ) -> TaskResult:
     result = flow_sync.sync_all_flows(directory, progress=log)
+    withdrawal_summary = (
+        f"TP提现 {result.withdrawal.inserted_rows} 条"
+        if result.withdrawal is not None
+        else "TP提现 跳过（当日无提现文件）"
+    )
     summary = (
         "四项流水同步完成："
         f"TP代付 {result.payout.inserted_rows} 条，"
         f"TP代收 {result.collection.inserted_rows} 条，"
-        f"TP提现 {result.withdrawal.inserted_rows} 条，"
+        f"{withdrawal_summary}，"
         f"钱包流水 {result.wallet.inserted_rows} 条。"
     )
     return TaskResult("一键流水同步完成", summary, result.files.workbook)
 
 
-def run_add_cards_task(workbook: Path, text: str, log: LogCallback) -> TaskResult:
+def run_add_cards_task(
+    workbook: Path,
+    text: str,
+    log: LogCallback,
+    sheet_color: str | None = None,
+    random_sheet_colors: bool = False,
+) -> TaskResult:
     cards = add_cards.parse_card_numbers(text)
     if not cards:
         raise ValueError("请至少输入一个卡号")
     log(f"正在向 {workbook.name} 添加 {len(cards)} 张卡…")
-    result = add_cards.add_cards_to_workbook(workbook, cards)
+    result = add_cards.add_cards_to_workbook(
+        workbook,
+        cards,
+        sheet_color=sheet_color,
+        random_sheet_colors=random_sheet_colors,
+    )
     summary = f"新增 {len(result.created)} 张卡，跳过 {len(result.skipped)} 张。"
     if result.skipped:
         details = "；".join(f"{card}（{reason}）" for card, reason in result.skipped)

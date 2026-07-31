@@ -169,7 +169,7 @@ class FlowSyncFiles:
     workbook: Path
     payment_orders: Path
     collection_orders: tuple[Path, Path]
-    withdrawal_orders: Path
+    withdrawal_orders: Path | None
     wallet_flow: Path
 
 
@@ -178,7 +178,7 @@ class FullFlowSyncResult:
     files: FlowSyncFiles
     payout: TpPayoutSyncResult
     collection: TpCollectionSyncResult
-    withdrawal: TpWithdrawalSyncResult
+    withdrawal: TpWithdrawalSyncResult | None
     wallet: TpPayoutSyncResult
 
 
@@ -634,14 +634,26 @@ def _make_target_row(
         column, _ = _split_cell_ref(ref)
         cell.set("r", f"{column}{row_number}")
         text: str | None = None
-        if cell.attrib.get("t") == "s":
+        cell_type = cell.attrib.get("t")
+        if cell_type == "s":
             value = cell.find(_tag("v"))
             shared_index = int(value.text) if value is not None and value.text else -1
             text = source_shared_strings.get(shared_index)
             if text is None:
                 raise ValueError(f"订单文件共享字符串索引无效：{shared_index}")
-        elif cell.attrib.get("t") == "inlineStr":
+        elif cell_type == "inlineStr":
             text = _inline_text(cell)
+        elif cell_type == "str":
+            value = cell.find(_tag("v"))
+            text = value.text if value is not None and value.text is not None else ""
+
+        formula = cell.find(_tag("f"))
+        if formula is not None:
+            if cell.find(_tag("v")) is None and text is None:
+                raise ValueError(
+                    f"订单文件单元格 {ref} 的公式没有缓存结果，无法粘贴为值"
+                )
+            cell.remove(formula)
 
         numeric_value = _numeric_cell_value(text) if column in numeric_columns else None
         if numeric_value is not None:
@@ -649,7 +661,7 @@ def _make_target_row(
                 cell.remove(child)
             cell.attrib.pop("t", None)
             ET.SubElement(cell, _tag("v")).text = numeric_value
-        elif cell.attrib.get("t") == "s":
+        elif text is not None:
             for child in list(cell):
                 cell.remove(child)
             cell.set("t", "inlineStr")
@@ -761,6 +773,98 @@ def _replace_detail_rows(
     )
 
 
+def _append_detail_rows(
+    target_root: ET.Element,
+    target_rows: list[ET.Element],
+    source_groups: list[tuple[list[ET.Element], dict[int, str]]],
+    old_detail_end: int,
+    summary_row: int | None,
+    max_column: str,
+    numeric_columns: frozenset[str],
+) -> TpPayoutSyncResult:
+    target_sheet_data = target_root.find(_tag("sheetData"))
+    if target_sheet_data is None:
+        raise ValueError("工作簿缺少 sheetData")
+
+    target_by_number = {_row_number(row): row for row in target_rows}
+    template_row = target_by_number[2]
+    template_attributes = dict(template_row.attrib)
+    styles_by_column = {
+        _split_cell_ref(cell.attrib["r"])[0]: cell.attrib["s"]
+        for cell in template_row.findall(_tag("c"))
+        if "r" in cell.attrib and "s" in cell.attrib
+    }
+    inserted_count = sum(
+        len(rows) for rows, _shared_strings in source_groups
+    )
+
+    appended_rows: list[ET.Element] = []
+    output_row_number = old_detail_end + 1
+    for source_rows, source_shared_strings in source_groups:
+        for source_row in source_rows:
+            appended_rows.append(
+                _make_target_row(
+                    source_row,
+                    output_row_number,
+                    template_attributes,
+                    styles_by_column,
+                    source_shared_strings,
+                    numeric_columns,
+                )
+            )
+            output_row_number += 1
+
+    leading_rows = [
+        row for row in target_rows if _row_number(row) <= old_detail_end
+    ]
+    trailing_rows = [
+        row for row in target_rows if _row_number(row) > old_detail_end
+    ]
+    for row in trailing_rows:
+        _set_row_number(row, _row_number(row) + inserted_count)
+
+    sheet_data_attributes = dict(target_sheet_data.attrib)
+    target_sheet_data.clear()
+    target_sheet_data.attrib.update(sheet_data_attributes)
+    for row in (*leading_rows, *appended_rows, *trailing_rows):
+        target_sheet_data.append(row)
+
+    new_detail_end = old_detail_end + inserted_count
+    auto_filter = target_root.find(_tag("autoFilter"))
+    if auto_filter is not None:
+        auto_filter.set("ref", f"A1:{max_column}{new_detail_end}")
+
+    dimension = target_root.find(_tag("dimension"))
+    if dimension is not None:
+        ref = dimension.attrib.get("ref")
+        if ref and ":" in ref:
+            min_col, min_row, dimension_max_col, _max_row = range_boundaries(
+                ref
+            )
+            max_row = max(
+                _row_number(row)
+                for row in target_sheet_data.findall(_tag("row"))
+            )
+            dimension.set(
+                "ref",
+                f"{get_column_letter(min_col)}{min_row}:"
+                f"{get_column_letter(dimension_max_col)}{max_row}",
+            )
+
+    return TpPayoutSyncResult(
+        removed_rows=0,
+        inserted_rows=inserted_count,
+        old_detail_end_row=old_detail_end,
+        new_detail_end_row=new_detail_end,
+        summary_row=(
+            summary_row + inserted_count
+            if summary_row is not None
+            else None
+        ),
+        shifted_rows=inserted_count,
+    )
+
+
 def _replace_tp_payout_roots(
     target_root: ET.Element,
     source_root: ET.Element,
@@ -794,7 +898,7 @@ def _replace_tp_payout_roots(
         old_detail_end,
         target_shared_strings,
     )
-    return _replace_detail_rows(
+    return _append_detail_rows(
         target_root,
         target_rows,
         [
@@ -907,7 +1011,7 @@ def _replace_tp_collection_roots(
                 raise ValueError(f"平台订单号重复：{order_id}")
             seen_order_ids.add(order_id)
 
-    base_result = _replace_detail_rows(
+    base_result = _append_detail_rows(
         target_root,
         target_rows,
         [
@@ -1000,7 +1104,7 @@ def _replace_tp_withdrawal_roots(
         old_detail_end,
         target_shared_strings,
     )
-    base_result = _replace_detail_rows(
+    base_result = _append_detail_rows(
         target_root,
         target_rows,
         [(paid_rows, source_shared_strings)],
@@ -1062,7 +1166,7 @@ def _replace_wallet_flow_roots(
         old_detail_end,
         target_shared_strings,
     )
-    return _replace_detail_rows(
+    return _append_detail_rows(
         target_root,
         target_rows,
         [
@@ -1195,18 +1299,19 @@ def _related_part(
     return _resolve_part_target(source_part, targets[0])
 
 
-def _withdrawal_pivot_replacements(
+def _pivot_replacements(
     archive: zipfile.ZipFile,
     target_sheet_part: str,
-    result: TpWithdrawalSyncResult,
+    result: TpPayoutSyncResult,
+    sheet_name: str,
 ) -> dict[str, bytes]:
     pivot_part = _related_part(archive, target_sheet_part, "/pivotTable")
     if pivot_part not in archive.namelist():
-        raise ValueError("TP提现数据透视表文件不存在")
+        raise ValueError(f"{sheet_name}数据透视表文件不存在")
     pivot_root = ET.fromstring(archive.read(pivot_part))
     location = pivot_root.find(_tag("location"))
     if location is None or not location.attrib.get("ref"):
-        raise ValueError("TP提现数据透视表缺少位置范围")
+        raise ValueError(f"{sheet_name}数据透视表缺少位置范围")
     min_col, min_row, max_col, max_row = range_boundaries(
         location.attrib["ref"]
     )
@@ -1216,7 +1321,7 @@ def _withdrawal_pivot_replacements(
         else None
     )
     if old_summary_row is None or min_row != old_summary_row:
-        raise ValueError("TP提现汇总表头与数据透视表位置不一致")
+        raise ValueError(f"{sheet_name}汇总表头与数据透视表位置不一致")
     if result.shifted_rows:
         location.set(
             "ref",
@@ -1230,15 +1335,23 @@ def _withdrawal_pivot_replacements(
         "/pivotCacheDefinition",
     )
     if cache_part not in archive.namelist():
-        raise ValueError("TP提现数据透视表缓存定义不存在")
+        raise ValueError(f"{sheet_name}数据透视表缓存定义不存在")
     cache_root = ET.fromstring(archive.read(cache_part))
     worksheet_source = cache_root.find(
         f"{_tag('cacheSource')}/{_tag('worksheetSource')}"
     )
-    if worksheet_source is None:
-        raise ValueError("TP提现数据透视表缓存缺少工作表来源")
-    worksheet_source.set("sheet", "TP提现")
-    worksheet_source.set("ref", f"A1:Y{result.new_detail_end_row}")
+    if worksheet_source is None or not worksheet_source.attrib.get("ref"):
+        raise ValueError(f"{sheet_name}数据透视表缓存缺少工作表来源")
+    source_min_col, source_min_row, source_max_col, source_max_row = (
+        range_boundaries(worksheet_source.attrib["ref"])
+    )
+    worksheet_source.set("sheet", sheet_name)
+    worksheet_source.set(
+        "ref",
+        f"{get_column_letter(source_min_col)}{source_min_row}:"
+        f"{get_column_letter(source_max_col)}"
+        f"{source_max_row + result.shifted_rows}",
+    )
     cache_root.set("refreshOnLoad", "1")
     cache_root.set("enableRefresh", "1")
 
@@ -1254,6 +1367,58 @@ def _withdrawal_pivot_replacements(
             xml_declaration=True,
         ),
     }
+
+
+def _payout_pivot_replacements(
+    archive: zipfile.ZipFile,
+    target_sheet_part: str,
+    result: TpPayoutSyncResult,
+) -> dict[str, bytes]:
+    return _pivot_replacements(
+        archive,
+        target_sheet_part,
+        result,
+        "TP代付",
+    )
+
+
+def _collection_pivot_replacements(
+    archive: zipfile.ZipFile,
+    target_sheet_part: str,
+    result: TpCollectionSyncResult,
+) -> dict[str, bytes]:
+    return _pivot_replacements(
+        archive,
+        target_sheet_part,
+        result,
+        "TP代收",
+    )
+
+
+def _withdrawal_pivot_replacements(
+    archive: zipfile.ZipFile,
+    target_sheet_part: str,
+    result: TpWithdrawalSyncResult,
+) -> dict[str, bytes]:
+    return _pivot_replacements(
+        archive,
+        target_sheet_part,
+        result,
+        "TP提现",
+    )
+
+
+def _wallet_pivot_replacements(
+    archive: zipfile.ZipFile,
+    target_sheet_part: str,
+    result: TpPayoutSyncResult,
+) -> dict[str, bytes]:
+    return _pivot_replacements(
+        archive,
+        target_sheet_part,
+        result,
+        "长款(当日)",
+    )
 
 
 def _write_replaced_archive(
@@ -1342,6 +1507,11 @@ def sync_tp_payout(
             target_shared,
             source_shared,
         )
+        pivot_replacements = _payout_pivot_replacements(
+            target_archive,
+            target_entry.path,
+            result,
+        )
         replacement = ET.tostring(
             target_root,
             encoding="utf-8",
@@ -1364,6 +1534,7 @@ def sync_tp_payout(
                 temporary_path,
                 target_entry.path,
                 replacement,
+                pivot_replacements,
             )
             os.chmod(temporary_path, file_mode)
         except Exception:
@@ -1475,6 +1646,11 @@ def sync_tp_collection(
             source_shared_strings[0],
             source_shared_strings[1],
         )
+        pivot_replacements = _collection_pivot_replacements(
+            target_archive,
+            target_entry.path,
+            result,
+        )
         replacement = ET.tostring(
             target_root,
             encoding="utf-8",
@@ -1497,6 +1673,7 @@ def sync_tp_collection(
                 temporary_path,
                 target_entry.path,
                 replacement,
+                pivot_replacements,
             )
             os.chmod(temporary_path, file_mode)
         except Exception:
@@ -1705,6 +1882,11 @@ def sync_wallet_flow(
             target_shared,
             source_shared,
         )
+        pivot_replacements = _wallet_pivot_replacements(
+            target_archive,
+            target_entry.path,
+            result,
+        )
         replacement = ET.tostring(
             target_root,
             encoding="utf-8",
@@ -1727,6 +1909,7 @@ def sync_wallet_flow(
                 temporary_path,
                 target_entry.path,
                 replacement,
+                pivot_replacements,
             )
             os.chmod(temporary_path, file_mode)
         except Exception:
@@ -1754,6 +1937,13 @@ def _require_file_count(
     raise ValueError(
         f"{label}：应有 {expected_count} 个，实际找到 {len(files)} 个：{names}"
     )
+
+
+def _optional_single_file(files: list[Path], label: str) -> Path | None:
+    if len(files) <= 1:
+        return files[0] if files else None
+    names = "、".join(path.name for path in files)
+    raise ValueError(f"{label}：最多允许 1 个，实际找到 {len(files)} 个：{names}")
 
 
 def discover_flow_sync_files(directory: Path) -> FlowSyncFiles:
@@ -1784,16 +1974,20 @@ def discover_flow_sync_files(directory: Path) -> FlowSyncFiles:
     ]
     _require_file_count(payment_orders, "付款订单 Excel", 1)
     _require_file_count(collection_orders, "收款订单 Excel", 2)
-    _require_file_count(withdrawal_orders, "商户提现申请 Excel", 1)
+    withdrawal_order = _optional_single_file(
+        withdrawal_orders,
+        "商户提现申请 Excel",
+    )
     _require_file_count(wallet_flows, "平台钱包流水 Excel", 1)
 
     source_files = {
         payment_orders[0],
         collection_orders[0],
         collection_orders[1],
-        withdrawal_orders[0],
         wallet_flows[0],
     }
+    if withdrawal_order is not None:
+        source_files.add(withdrawal_order)
     required_sheets = {"TP代付", "TP代收", "TP提现", "长款(当日)"}
     workbook_candidates: list[Path] = []
     for path in excel_files:
@@ -1812,7 +2006,7 @@ def discover_flow_sync_files(directory: Path) -> FlowSyncFiles:
         workbook=workbook_candidates[0],
         payment_orders=payment_orders[0],
         collection_orders=(collection_orders[0], collection_orders[1]),
-        withdrawal_orders=withdrawal_orders[0],
+        withdrawal_orders=withdrawal_order,
         wallet_flow=wallet_flows[0],
     )
 
@@ -1830,7 +2024,10 @@ def sync_all_flows(
             f"{files.collection_orders[0].name}、"
             f"{files.collection_orders[1].name}"
         )
-        progress(f"已识别商户提现申请：{files.withdrawal_orders.name}")
+        if files.withdrawal_orders is None:
+            progress("未找到商户提现申请：当日无提现，将跳过 TP提现")
+        else:
+            progress(f"已识别商户提现申请：{files.withdrawal_orders.name}")
         progress(f"已识别平台钱包流水：{files.wallet_flow.name}")
 
     file_mode = stat.S_IMODE(files.workbook.stat().st_mode)
@@ -1858,13 +2055,18 @@ def sync_all_flows(
             files.collection_orders[1],
             progress=progress,
         )
-        if progress is not None:
-            progress("第 3/4 步：正在同步 TP提现…")
-        withdrawal_result = sync_tp_withdrawal(
-            temporary_workbook,
-            files.withdrawal_orders,
-            progress=progress,
-        )
+        withdrawal_result: TpWithdrawalSyncResult | None = None
+        if files.withdrawal_orders is None:
+            if progress is not None:
+                progress("第 3/4 步：当日无提现文件，跳过 TP提现。")
+        else:
+            if progress is not None:
+                progress("第 3/4 步：正在同步 TP提现…")
+            withdrawal_result = sync_tp_withdrawal(
+                temporary_workbook,
+                files.withdrawal_orders,
+                progress=progress,
+            )
         if progress is not None:
             progress("第 4/4 步：正在同步钱包流水…")
         wallet_result = sync_wallet_flow(

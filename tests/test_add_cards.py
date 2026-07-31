@@ -9,6 +9,7 @@ import zipfile
 from openpyxl import Workbook, load_workbook
 
 from autoexcel.add_cards import (
+    RANDOM_SHEET_TAB_COLORS,
     _read_card_numbers_windows,
     add_cards_to_workbook,
     parse_card_numbers,
@@ -62,6 +63,9 @@ class AddCardsTest(unittest.TestCase):
             )
             for card in ("1234", "3121"):
                 sheet = updated[card]
+                self.assertTrue(
+                    sheet.sheet_properties.tabColor.rgb.endswith("3157D5")
+                )
                 self.assertEqual(sheet["B3"].value, 0)
                 self.assertEqual(sheet["N3"].value, "=M3")
                 self.assertEqual(sheet["C3"].value, "=B3+10")
@@ -93,6 +97,76 @@ class AddCardsTest(unittest.TestCase):
 
             entries = {entry.name: entry.path for entry in list_sheets(workbook_path)}
             self.assertEqual(entries["1234"], "xl/worksheets/sheet4.xml")
+
+    def test_applies_selected_tab_color_to_every_created_sheet(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            workbook_path = Path(temporary_directory) / "cards.xlsx"
+            workbook = Workbook()
+            workbook.active.title = "试算平衡"
+            template = workbook.create_sheet("01833770033")
+            template.sheet_properties.tabColor = "3157D5"
+            template["A1"] = "模板"
+            template["A2"] = "日期"
+            template["B2"] = "期初余额"
+            template["M2"] = "差值"
+            template["N2"] = "增量"
+            template["A3"] = 46210
+            workbook.save(workbook_path)
+
+            add_cards_to_workbook(
+                workbook_path,
+                ["1234", "3121"],
+                sheet_color="#E11D48",
+            )
+
+            updated = load_workbook(workbook_path)
+            for card in ("1234", "3121"):
+                self.assertTrue(
+                    updated[card]
+                    .sheet_properties.tabColor.rgb.endswith("E11D48")
+                )
+
+    def test_random_tab_colors_exclude_black_white_and_avoid_adjacent_repeat(
+        self,
+    ) -> None:
+        self.assertNotIn("000000", RANDOM_SHEET_TAB_COLORS)
+        self.assertNotIn("FFFFFF", RANDOM_SHEET_TAB_COLORS)
+        with TemporaryDirectory() as temporary_directory:
+            workbook_path = Path(temporary_directory) / "cards.xlsx"
+            workbook = Workbook()
+            workbook.active.title = "试算平衡"
+            template = workbook.create_sheet("01833770033")
+            template.sheet_properties.tabColor = "3157D5"
+            template["A1"] = "模板"
+            template["A2"] = "日期"
+            template["B2"] = "期初余额"
+            template["M2"] = "差值"
+            template["N2"] = "增量"
+            template["A3"] = 46210
+            workbook.save(workbook_path)
+
+            with patch(
+                "autoexcel.add_cards.random.choice",
+                side_effect=["2563EB", "DB2777", "16A34A"],
+            ):
+                add_cards_to_workbook(
+                    workbook_path,
+                    ["1234", "3121", "5678"],
+                    random_sheet_colors=True,
+                )
+
+            updated = load_workbook(workbook_path)
+            colors = [
+                updated[card].sheet_properties.tabColor.rgb[-6:]
+                for card in ("1234", "3121", "5678")
+            ]
+            self.assertEqual(colors, ["2563EB", "DB2777", "16A34A"])
+            self.assertTrue(
+                all(color in RANDOM_SHEET_TAB_COLORS for color in colors)
+            )
+            self.assertTrue(
+                all(first != second for first, second in zip(colors, colors[1:]))
+            )
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from unittest.mock import patch
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.table import Table
 
+from autoexcel.add_cards import AddCardsResult
 from autoexcel.daily_long_sync import DailyLongSyncResult
 from autoexcel.flow_sync import (
     FlowSyncFiles,
@@ -19,6 +20,7 @@ from autoexcel.flow_sync import (
 )
 from autoexcel.gui_tasks import (
     _jobs_from_directory,
+    run_add_cards_task,
     run_daily_long_sync_task,
     run_fill_task,
     run_full_flow_sync_task,
@@ -30,6 +32,38 @@ from autoexcel.gui_tasks import (
 
 
 class GuiTasksTest(unittest.TestCase):
+    def test_add_cards_task_passes_selected_color_mode(self) -> None:
+        workbook = Path("/tmp/cards.xlsx")
+        with (
+            patch(
+                "autoexcel.gui_tasks.add_cards.parse_card_numbers",
+                return_value=["1234", "3121"],
+            ),
+            patch(
+                "autoexcel.gui_tasks.add_cards.add_cards_to_workbook",
+                return_value=AddCardsResult(
+                    ["1234", "3121"],
+                    [],
+                    "01833770033",
+                ),
+            ) as add_cards,
+        ):
+            result = run_add_cards_task(
+                workbook,
+                "1234\n3121",
+                lambda _message: None,
+                sheet_color=None,
+                random_sheet_colors=True,
+            )
+
+        add_cards.assert_called_once_with(
+            workbook,
+            ["1234", "3121"],
+            sheet_color=None,
+            random_sheet_colors=True,
+        )
+        self.assertEqual(result.title, "增卡完成")
+
     def test_daily_long_sync_task_reports_inserted_and_skipped_rows(self) -> None:
         result = DailyLongSyncResult(
             source_rows=12,
@@ -98,6 +132,42 @@ class GuiTasksTest(unittest.TestCase):
         self.assertIn("TP提现 3 条", task_result.summary)
         self.assertIn("钱包流水 18 条", task_result.summary)
         self.assertEqual(task_result.output_path, workbook)
+
+    def test_full_flow_sync_task_reports_missing_withdrawal_as_skipped(self) -> None:
+        directory = Path("/tmp/flow-sync")
+        workbook = directory / "对账结果.xlsx"
+        payout = TpPayoutSyncResult(10, 14, 11, 15, 18, 4)
+        collection = TpCollectionSyncResult(20, 12, 21, 13, 30, 0, 10, 2)
+        wallet = TpPayoutSyncResult(30, 18, 31, 19, 40, 0)
+        result = FullFlowSyncResult(
+            files=FlowSyncFiles(
+                directory=directory,
+                workbook=workbook,
+                payment_orders=directory / "付款订单.xlsx",
+                collection_orders=(
+                    directory / "收款订单1.xlsx",
+                    directory / "收款订单2.xlsx",
+                ),
+                withdrawal_orders=None,
+                wallet_flow=directory / "平台钱包流水.xlsx",
+            ),
+            payout=payout,
+            collection=collection,
+            withdrawal=None,
+            wallet=wallet,
+        )
+
+        with patch(
+            "autoexcel.gui_tasks.flow_sync.sync_all_flows",
+            return_value=result,
+        ):
+            task_result = run_full_flow_sync_task(
+                directory,
+                lambda _message: None,
+            )
+
+        self.assertIn("TP提现 跳过（当日无提现文件）", task_result.summary)
+        self.assertIn("钱包流水 18 条", task_result.summary)
 
     def test_wallet_flow_sync_task_reports_row_counts(self) -> None:
         result = TpPayoutSyncResult(

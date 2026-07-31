@@ -6,10 +6,11 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel
 from PySide6.QtGui import QMovie
 
-from autoexcel.gui import FlowSyncPage, HomePage
+from autoexcel.gui import FlowSyncPage, HomePage, build_app_style
 from autoexcel.license import LicenseInfo
 
 
@@ -140,6 +141,24 @@ class GuiHomeCardsTest(unittest.TestCase):
         self.assertFalse(page.cards[1].property("syncSelected"))
         self.assertFalse(page.cards[2].property("syncSelected"))
         self.assertTrue(page.cards[3].property("syncSelected"))
+
+    def test_flow_sync_feature_cards_fit_without_horizontal_scroll(self) -> None:
+        self.app.setStyleSheet(build_app_style("indigo"))
+        page = FlowSyncPage()
+        page.resize(1000, 800)
+        page.show()
+        self.app.processEvents()
+
+        self.assertEqual(page.form_scroll.horizontalScrollBar().maximum(), 0)
+        self.assertEqual(
+            page.form_scroll.verticalScrollBarPolicy(),
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+        )
+        self.assertLessEqual(
+            page.form_panel.width(),
+            page.form_scroll.viewport().width(),
+        )
+        self.assertTrue(all(card.width() < 240 for card in page.cards))
 
     def test_flow_sync_run_requires_license(self) -> None:
         page = FlowSyncPage()
