@@ -730,7 +730,7 @@ def _replace_detail_rows(
             )
             output_row_number += 1
 
-    shift = max(0, new_count - old_count)
+    shift = new_count - old_count
     leading_rows = [row for row in target_rows if _row_number(row) < 2]
     trailing_rows = [row for row in target_rows if _row_number(row) > old_detail_end]
     if shift:
@@ -773,98 +773,6 @@ def _replace_detail_rows(
     )
 
 
-def _append_detail_rows(
-    target_root: ET.Element,
-    target_rows: list[ET.Element],
-    source_groups: list[tuple[list[ET.Element], dict[int, str]]],
-    old_detail_end: int,
-    summary_row: int | None,
-    max_column: str,
-    numeric_columns: frozenset[str],
-) -> TpPayoutSyncResult:
-    target_sheet_data = target_root.find(_tag("sheetData"))
-    if target_sheet_data is None:
-        raise ValueError("工作簿缺少 sheetData")
-
-    target_by_number = {_row_number(row): row for row in target_rows}
-    template_row = target_by_number[2]
-    template_attributes = dict(template_row.attrib)
-    styles_by_column = {
-        _split_cell_ref(cell.attrib["r"])[0]: cell.attrib["s"]
-        for cell in template_row.findall(_tag("c"))
-        if "r" in cell.attrib and "s" in cell.attrib
-    }
-    inserted_count = sum(
-        len(rows) for rows, _shared_strings in source_groups
-    )
-
-    appended_rows: list[ET.Element] = []
-    output_row_number = old_detail_end + 1
-    for source_rows, source_shared_strings in source_groups:
-        for source_row in source_rows:
-            appended_rows.append(
-                _make_target_row(
-                    source_row,
-                    output_row_number,
-                    template_attributes,
-                    styles_by_column,
-                    source_shared_strings,
-                    numeric_columns,
-                )
-            )
-            output_row_number += 1
-
-    leading_rows = [
-        row for row in target_rows if _row_number(row) <= old_detail_end
-    ]
-    trailing_rows = [
-        row for row in target_rows if _row_number(row) > old_detail_end
-    ]
-    for row in trailing_rows:
-        _set_row_number(row, _row_number(row) + inserted_count)
-
-    sheet_data_attributes = dict(target_sheet_data.attrib)
-    target_sheet_data.clear()
-    target_sheet_data.attrib.update(sheet_data_attributes)
-    for row in (*leading_rows, *appended_rows, *trailing_rows):
-        target_sheet_data.append(row)
-
-    new_detail_end = old_detail_end + inserted_count
-    auto_filter = target_root.find(_tag("autoFilter"))
-    if auto_filter is not None:
-        auto_filter.set("ref", f"A1:{max_column}{new_detail_end}")
-
-    dimension = target_root.find(_tag("dimension"))
-    if dimension is not None:
-        ref = dimension.attrib.get("ref")
-        if ref and ":" in ref:
-            min_col, min_row, dimension_max_col, _max_row = range_boundaries(
-                ref
-            )
-            max_row = max(
-                _row_number(row)
-                for row in target_sheet_data.findall(_tag("row"))
-            )
-            dimension.set(
-                "ref",
-                f"{get_column_letter(min_col)}{min_row}:"
-                f"{get_column_letter(dimension_max_col)}{max_row}",
-            )
-
-    return TpPayoutSyncResult(
-        removed_rows=0,
-        inserted_rows=inserted_count,
-        old_detail_end_row=old_detail_end,
-        new_detail_end_row=new_detail_end,
-        summary_row=(
-            summary_row + inserted_count
-            if summary_row is not None
-            else None
-        ),
-        shifted_rows=inserted_count,
-    )
-
-
 def _replace_tp_payout_roots(
     target_root: ET.Element,
     source_root: ET.Element,
@@ -898,7 +806,7 @@ def _replace_tp_payout_roots(
         old_detail_end,
         target_shared_strings,
     )
-    return _append_detail_rows(
+    return _replace_detail_rows(
         target_root,
         target_rows,
         [
@@ -1011,7 +919,7 @@ def _replace_tp_collection_roots(
                 raise ValueError(f"平台订单号重复：{order_id}")
             seen_order_ids.add(order_id)
 
-    base_result = _append_detail_rows(
+    base_result = _replace_detail_rows(
         target_root,
         target_rows,
         [
@@ -1104,7 +1012,7 @@ def _replace_tp_withdrawal_roots(
         old_detail_end,
         target_shared_strings,
     )
-    base_result = _append_detail_rows(
+    base_result = _replace_detail_rows(
         target_root,
         target_rows,
         [(paid_rows, source_shared_strings)],
@@ -1166,7 +1074,7 @@ def _replace_wallet_flow_roots(
         old_detail_end,
         target_shared_strings,
     )
-    return _append_detail_rows(
+    return _replace_detail_rows(
         target_root,
         target_rows,
         [

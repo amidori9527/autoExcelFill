@@ -459,14 +459,14 @@ class TpPayoutSyncTest(unittest.TestCase):
 
         _replace_tp_payout_roots(target, source, {}, {42: "1,234.50"})
 
-        target_row = row_by_number(target)[3]
+        target_row = row_by_number(target)[2]
         order_id_cell = next(
             cell for cell in target_row.findall(tag("c"))
-            if cell.attrib["r"] == "A3"
+            if cell.attrib["r"] == "A2"
         )
         amount_cell = next(
             cell for cell in target_row.findall(tag("c"))
-            if cell.attrib["r"] == "F3"
+            if cell.attrib["r"] == "F2"
         )
         self.assertEqual(order_id_cell.attrib["t"], "inlineStr")
         self.assertEqual(
@@ -519,9 +519,9 @@ class TpPayoutSyncTest(unittest.TestCase):
         self.assertEqual(
             [
                 _cell_text(row_by_number(target)[row_number].find(tag("c")), {})
-                for row_number in range(2, 5)
+                for row_number in range(2, 4)
             ],
-            ["old-1", "new-1", "new-2"],
+            ["new-1", "new-2"],
         )
 
     def test_headerless_continuation_sheet_is_appended(self) -> None:
@@ -555,9 +555,9 @@ class TpPayoutSyncTest(unittest.TestCase):
         self.assertEqual(
             [
                 _cell_text(row_by_number(target)[row_number].find(tag("c")), {})
-                for row_number in range(2, 7)
+                for row_number in range(2, 6)
             ],
-            ["old-1", "new-1", "new-2", "new-3", "new-4"],
+            ["new-1", "new-2", "new-3", "new-4"],
         )
 
     def test_source_shared_strings_are_converted_for_target_workbook(self) -> None:
@@ -576,14 +576,14 @@ class TpPayoutSyncTest(unittest.TestCase):
             {42: "new-shared-order"},
         )
 
-        target_cell = row_by_number(target)[3].find(tag("c"))
+        target_cell = row_by_number(target)[2].find(tag("c"))
         self.assertEqual(target_cell.attrib["t"], "inlineStr")
         self.assertEqual(
             target_cell.find(f"{tag('is')}/{tag('t')}").text,
             "new-shared-order",
         )
 
-    def test_source_rows_are_appended_and_summary_is_shifted_by_source_count(
+    def test_source_rows_replace_old_rows_and_summary_moves_by_net_difference(
         self,
     ) -> None:
         target = make_workbook_root(["old-1", "old-2"], True, "10")
@@ -596,52 +596,49 @@ class TpPayoutSyncTest(unittest.TestCase):
         result = _replace_tp_payout_roots(target, source, {}, {})
 
         self.assertEqual(result.old_detail_end_row, 3)
-        self.assertEqual(result.removed_rows, 0)
+        self.assertEqual(result.removed_rows, 2)
         self.assertEqual(result.inserted_rows, 4)
-        self.assertEqual(result.new_detail_end_row, 7)
-        self.assertEqual(result.shifted_rows, 4)
-        self.assertEqual(result.summary_row, 9)
+        self.assertEqual(result.new_detail_end_row, 5)
+        self.assertEqual(result.shifted_rows, 2)
+        self.assertEqual(result.summary_row, 7)
         rows = row_by_number(target)
         self.assertEqual(
             rows[2].find(tag("c")).find(f"{tag('is')}/{tag('t')}").text,
-            "old-1",
-        )
-        self.assertEqual(
-            rows[4].find(tag("c")).find(f"{tag('is')}/{tag('t')}").text,
             "new-1",
         )
-        self.assertEqual(rows[4].find(tag("c")).attrib["s"], "10")
-        self.assertEqual(rows[9].findall(tag("c"))[0].attrib["r"], "E9")
-        self.assertEqual(target.find(tag("autoFilter")).attrib["ref"], "A1:V7")
-        self.assertEqual(target.find(tag("dimension")).attrib["ref"], "A1:V10")
+        self.assertEqual(rows[2].find(tag("c")).attrib["s"], "10")
+        self.assertEqual(rows[7].findall(tag("c"))[0].attrib["r"], "E7")
+        self.assertEqual(target.find(tag("autoFilter")).attrib["ref"], "A1:V5")
+        self.assertEqual(target.find(tag("dimension")).attrib["ref"], "A1:V8")
 
-    def test_even_one_source_row_is_inserted_before_summary(self) -> None:
+    def test_fewer_source_rows_move_summary_up_without_leaving_old_rows(self) -> None:
         target = make_workbook_root(["old-1", "old-2", "old-3"], True, "10")
         source = make_workbook_root(["new-1"], False, "1")
 
         result = _replace_tp_payout_roots(target, source, {}, {})
 
         self.assertEqual(result.old_detail_end_row, 4)
-        self.assertEqual(result.removed_rows, 0)
-        self.assertEqual(result.new_detail_end_row, 5)
-        self.assertEqual(result.shifted_rows, 1)
-        self.assertEqual(result.summary_row, 7)
+        self.assertEqual(result.removed_rows, 3)
+        self.assertEqual(result.new_detail_end_row, 2)
+        self.assertEqual(result.shifted_rows, -2)
+        self.assertEqual(result.summary_row, 4)
         rows = row_by_number(target)
         self.assertEqual(
-            rows[5].find(tag("c")).find(f"{tag('is')}/{tag('t')}").text,
+            rows[2].find(tag("c")).find(f"{tag('is')}/{tag('t')}").text,
             "new-1",
         )
-        self.assertEqual(rows[7].findall(tag("c"))[0].attrib["r"], "E7")
-        self.assertEqual(target.find(tag("autoFilter")).attrib["ref"], "A1:V5")
+        self.assertEqual(rows[4].findall(tag("c"))[0].attrib["r"], "E4")
+        self.assertEqual(target.find(tag("autoFilter")).attrib["ref"], "A1:V2")
+        self.assertEqual(target.find(tag("dimension")).attrib["ref"], "A1:V5")
 
-    def test_pivot_source_and_location_are_shifted_for_appended_rows(self) -> None:
+    def test_pivot_source_and_location_move_up_for_fewer_replacement_rows(self) -> None:
         result = TpPayoutSyncResult(
-            removed_rows=0,
-            inserted_rows=4,
-            old_detail_end_row=3,
-            new_detail_end_row=7,
-            summary_row=9,
-            shifted_rows=4,
+            removed_rows=3,
+            inserted_rows=1,
+            old_detail_end_row=4,
+            new_detail_end_row=2,
+            summary_row=4,
+            shifted_rows=-2,
         )
         worksheet_relationships = (
             '<Relationships xmlns="http://schemas.openxmlformats.org/'
@@ -653,7 +650,7 @@ class TpPayoutSyncTest(unittest.TestCase):
         )
         pivot = (
             f'<pivotTableDefinition xmlns="{MAIN_NS}">'
-            '<location ref="E5:I8"/>'
+            '<location ref="E6:I9"/>'
             "</pivotTableDefinition>"
         )
         pivot_relationships = (
@@ -667,7 +664,7 @@ class TpPayoutSyncTest(unittest.TestCase):
         cache = (
             f'<pivotCacheDefinition xmlns="{MAIN_NS}">'
             '<cacheSource type="worksheet">'
-            '<worksheetSource ref="A1:U4" sheet="TP代付"/>'
+            '<worksheetSource ref="A1:U5" sheet="TP代付"/>'
             "</cacheSource>"
             "</pivotCacheDefinition>"
         )
@@ -701,7 +698,7 @@ class TpPayoutSyncTest(unittest.TestCase):
         )
         self.assertEqual(
             pivot_root.find(tag("location")).attrib["ref"],
-            "E9:I12",
+            "E4:I7",
         )
         cache_root = ET.fromstring(
             replacements[
@@ -711,7 +708,7 @@ class TpPayoutSyncTest(unittest.TestCase):
         worksheet_source = cache_root.find(
             f"{tag('cacheSource')}/{tag('worksheetSource')}"
         )
-        self.assertEqual(worksheet_source.attrib["ref"], "A1:U8")
+        self.assertEqual(worksheet_source.attrib["ref"], "A1:U3")
         self.assertEqual(cache_root.attrib["refreshOnLoad"], "1")
         self.assertEqual(cache_root.attrib["enableRefresh"], "1")
 
@@ -751,14 +748,14 @@ class TpCollectionSyncTest(unittest.TestCase):
             {},
         )
 
-        target_row = row_by_number(target)[3]
+        target_row = row_by_number(target)[2]
         order_id_cell = next(
             cell for cell in target_row.findall(tag("c"))
-            if cell.attrib["r"] == "A3"
+            if cell.attrib["r"] == "A2"
         )
         amount_cell = next(
             cell for cell in target_row.findall(tag("c"))
-            if cell.attrib["r"] == "G3"
+            if cell.attrib["r"] == "G2"
         )
         self.assertEqual(order_id_cell.attrib["t"], "inlineStr")
         self.assertEqual(
@@ -847,28 +844,28 @@ class TpCollectionSyncTest(unittest.TestCase):
         rows = row_by_number(target)
         order_ids = [
             rows[row_number].find(tag("c")).find(f"{tag('is')}/{tag('t')}").text
-            for row_number in range(2, 7)
+            for row_number in range(2, 5)
         ]
         self.assertEqual(
             order_ids,
-            ["old-1", "old-2", "success-1", "success-2", "partial-1"],
+            ["success-1", "success-2", "partial-1"],
         )
         self.assertEqual(result.successful_rows, 2)
         self.assertEqual(result.partial_rows, 1)
-        self.assertEqual(result.removed_rows, 0)
+        self.assertEqual(result.removed_rows, 2)
         self.assertEqual(result.inserted_rows, 3)
-        self.assertEqual(result.summary_row, 8)
-        self.assertEqual(result.shifted_rows, 3)
-        self.assertEqual(target.find(tag("autoFilter")).attrib["ref"], "A1:Z6")
+        self.assertEqual(result.summary_row, 6)
+        self.assertEqual(result.shifted_rows, 1)
+        self.assertEqual(target.find(tag("autoFilter")).attrib["ref"], "A1:Z4")
 
-    def test_pivot_source_and_location_follow_appended_rows(self) -> None:
+    def test_pivot_source_and_location_follow_replacement_row_difference(self) -> None:
         result = TpCollectionSyncResult(
-            removed_rows=0,
+            removed_rows=2,
             inserted_rows=3,
             old_detail_end_row=3,
-            new_detail_end_row=6,
-            summary_row=8,
-            shifted_rows=3,
+            new_detail_end_row=4,
+            summary_row=6,
+            shifted_rows=1,
             successful_rows=2,
             partial_rows=1,
         )
@@ -880,8 +877,8 @@ class TpCollectionSyncTest(unittest.TestCase):
             "TP代收",
             "B5:F8",
             "A1:X4",
-            "B8:F11",
-            "A1:X7",
+            "B6:F9",
+            "A1:X5",
         )
 
     def test_duplicate_platform_order_id_is_rejected(self) -> None:
@@ -963,26 +960,27 @@ class TpWithdrawalSyncTest(unittest.TestCase):
             {},
         )
 
-        self.assertEqual(result.removed_rows, 0)
+        self.assertEqual(result.removed_rows, 2)
         self.assertEqual(result.inserted_rows, 1)
         self.assertEqual(result.skipped_rows, 1)
+        self.assertEqual(result.shifted_rows, -1)
         rows = row_by_number(target)
-        detail = rows[4]
+        detail = rows[2]
         values = {
             cell.attrib["r"]: _cell_text(cell, {})
             for cell in detail.findall(tag("c"))
         }
-        self.assertEqual(values["A4"], "000123")
-        self.assertEqual(values["K4"], "wallet-001")
-        self.assertEqual(values["L4"], "bank-001")
-        self.assertEqual(values["P4"], "01300000000")
-        self.assertEqual(values["X4"], "已打款")
-        self.assertEqual(values["Y4"], "reason")
-        self.assertNotIn("Z4", values)
+        self.assertEqual(values["A2"], "000123")
+        self.assertEqual(values["K2"], "wallet-001")
+        self.assertEqual(values["L2"], "bank-001")
+        self.assertEqual(values["P2"], "01300000000")
+        self.assertEqual(values["X2"], "已打款")
+        self.assertEqual(values["Y2"], "reason")
+        self.assertNotIn("Z2", values)
         amount_cell = next(
             cell
             for cell in detail.findall(tag("c"))
-            if cell.attrib["r"] == "D4"
+            if cell.attrib["r"] == "D2"
         )
         self.assertNotIn("t", amount_cell.attrib)
         self.assertEqual(amount_cell.find(tag("v")).text, "1234.50")
@@ -1087,14 +1085,14 @@ class WalletFlowSyncTest(unittest.TestCase):
 
         _replace_wallet_flow_roots(target, source, {}, {})
 
-        target_row = row_by_number(target)[3]
+        target_row = row_by_number(target)[2]
         transaction_id_cell = next(
             cell for cell in target_row.findall(tag("c"))
-            if cell.attrib["r"] == "F3"
+            if cell.attrib["r"] == "F2"
         )
         amount_cell = next(
             cell for cell in target_row.findall(tag("c"))
-            if cell.attrib["r"] == "M3"
+            if cell.attrib["r"] == "M2"
         )
         self.assertEqual(transaction_id_cell.attrib["t"], "inlineStr")
         self.assertEqual(
@@ -1157,7 +1155,7 @@ class WalletFlowSyncTest(unittest.TestCase):
 
         rows = row_by_number(target)
         transaction_ids = []
-        for row_number in range(2, 7):
+        for row_number in range(2, 5):
             cell = next(
                 cell
                 for cell in rows[row_number].findall(tag("c"))
@@ -1168,22 +1166,22 @@ class WalletFlowSyncTest(unittest.TestCase):
             )
         self.assertEqual(
             transaction_ids,
-            ["old-1", "old-2", "cross-day", "same-day-1", "same-day-2"],
+            ["cross-day", "same-day-1", "same-day-2"],
         )
-        self.assertEqual(result.removed_rows, 0)
+        self.assertEqual(result.removed_rows, 2)
         self.assertEqual(result.inserted_rows, 3)
-        self.assertEqual(result.summary_row, 8)
-        self.assertEqual(result.shifted_rows, 3)
-        self.assertEqual(target.find(tag("autoFilter")).attrib["ref"], "A1:N6")
+        self.assertEqual(result.summary_row, 6)
+        self.assertEqual(result.shifted_rows, 1)
+        self.assertEqual(target.find(tag("autoFilter")).attrib["ref"], "A1:N4")
 
-    def test_pivot_source_and_location_follow_appended_rows(self) -> None:
+    def test_pivot_source_and_location_follow_replacement_row_difference(self) -> None:
         result = TpPayoutSyncResult(
-            removed_rows=0,
+            removed_rows=2,
             inserted_rows=3,
             old_detail_end_row=3,
-            new_detail_end_row=6,
-            summary_row=8,
-            shifted_rows=3,
+            new_detail_end_row=4,
+            summary_row=6,
+            shifted_rows=1,
         )
 
         assert_pivot_replacement(
@@ -1193,8 +1191,8 @@ class WalletFlowSyncTest(unittest.TestCase):
             "长款(当日)",
             "B5:D8",
             "A1:N4",
-            "B8:D11",
-            "A1:N7",
+            "B6:D9",
+            "A1:N5",
         )
 
 
